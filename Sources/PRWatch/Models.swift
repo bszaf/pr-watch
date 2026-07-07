@@ -25,16 +25,20 @@ enum Mergeable: String, Codable, Sendable {
 }
 
 struct PullRequest: Identifiable, Sendable, Equatable {
-    let id: String            // "owner/repo#number"
+    let id: String            // "<provider>:owner/repo#number" — unique across providers
+    let provider: Provider
     let number: Int
     let title: String
     let url: String
     let isDraft: Bool
-    let repo: String          // owner/repo
+    let repo: String          // owner/repo (GitHub) or group/project (GitLab)
     let author: String
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
     let ciState: CheckState?
+
+    /// Display reference: "#123" on GitHub, "!123" on GitLab.
+    var ref: String { provider == .gitlab ? "!\(number)" : "#\(number)" }
 
     /// The single worst-status glyph for compact displays.
     var glyph: String {

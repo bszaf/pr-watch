@@ -7,7 +7,7 @@ private func pr(
     mergeable: Mergeable = .unknown
 ) -> PullRequest {
     PullRequest(
-        id: "RiverFinancial/alto#1", number: 1, title: "Test PR",
+        id: "github:RiverFinancial/alto#1", provider: .github, number: 1, title: "Test PR",
         url: "https://example.com", isDraft: false, repo: "RiverFinancial/alto",
         author: "bszaf", reviewDecision: review, mergeable: mergeable, ciState: ci
     )

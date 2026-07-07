@@ -59,12 +59,18 @@ struct GitHubClient {
 
     // MARK: - Token resolution
 
-    /// 1) Keychain PAT  2) `gh auth token` via a login shell  3) probe homebrew `gh`.
-    static func resolveToken() -> String? {
-        if let pat = Keychain.readToken() { return pat }
-        if let t = run("/bin/zsh", ["-lc", "gh auth token"]) { return t }
+    /// 1) Keychain PAT  2) `gh auth token` via a login shell  3) probe homebrew `gh`
+    /// 4) GITHUB_TOKEN env.
+    static func resolveToken() -> ResolvedToken? {
+        if let pat = Keychain.readToken(account: Provider.github.keychainAccount) {
+            return ResolvedToken(token: pat, source: .keychain)
+        }
+        if let t = run("/bin/zsh", ["-lc", "gh auth token"]) { return ResolvedToken(token: t, source: .cli) }
         for path in ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"] where FileManager.default.isExecutableFile(atPath: path) {
-            if let t = run(path, ["auth", "token"]) { return t }
+            if let t = run(path, ["auth", "token"]) { return ResolvedToken(token: t, source: .cli) }
+        }
+        if let env = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !env.isEmpty {
+            return ResolvedToken(token: env, source: .env)
         }
         return nil
     }
@@ -86,18 +92,13 @@ struct GitHubClient {
 
     // MARK: - Fetch
 
-    struct FetchResult {
-        let prs: [PullRequest]
-        let viewerLogin: String?
-    }
-
-    func fetch() async throws -> FetchResult {
-        guard let q = query() else { return FetchResult(prs: [], viewerLogin: nil) }
-        guard let token = Self.resolveToken() else { throw GitHubError.noToken }
+    func fetch() async throws -> ProviderResult {
+        guard let q = query() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
+        guard let resolved = Self.resolveToken() else { throw GitHubError.noToken }
 
         var req = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
         req.httpMethod = "POST"
-        req.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("bearer \(resolved.token)", forHTTPHeaderField: "Authorization")
         req.setValue("PR-Watch", forHTTPHeaderField: "User-Agent")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["query": q])
 
@@ -125,7 +126,7 @@ struct GitHubClient {
             guard let pr = node.toPullRequest(), seen.insert(pr.id).inserted else { continue }
             result.append(pr)
         }
-        return FetchResult(prs: result, viewerLogin: block.viewer?.login)
+        return ProviderResult(prs: result, viewerLogin: block.viewer?.login, source: resolved.source)
     }
 
     // MARK: - Query building
@@ -233,7 +234,8 @@ private struct GraphQLResponse: Decodable {
         func toPullRequest() -> PullRequest? {
             guard let number, let title, let url, let repo = repository?.nameWithOwner else { return nil }
             return PullRequest(
-                id: "\(repo)#\(number)",
+                id: "github:\(repo)#\(number)",
+                provider: .github,
                 number: number,
                 title: title,
                 url: url,
