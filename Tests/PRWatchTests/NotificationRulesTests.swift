@@ -85,6 +85,17 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
         #expect(n.isEmpty)
     }
 
+    @Test func adaptivePollingSpeedsUpWhenActive() {
+        // Idle (nothing pending, no recent change) → configured interval.
+        #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 60) == 60)
+        // CI in flight → fast.
+        #expect(adaptiveInterval(anyPending: true, recentlyChanged: false, idle: 60) == 15)
+        // Recent change → fast.
+        #expect(adaptiveInterval(anyPending: false, recentlyChanged: true, idle: 300) == 15)
+        // Idle never faster than the fast floor.
+        #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 5) == 15)
+    }
+
     @Test func multipleTransitionsStack() {
         let prev = SnapshotState(pr(ci: .pending, review: .reviewRequired, mergeable: .mergeable))
         let n = notifications(
