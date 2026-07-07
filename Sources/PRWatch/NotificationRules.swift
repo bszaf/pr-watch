@@ -44,7 +44,7 @@ func isEnabled(_ kind: ActivityKind, _ triggers: Triggers) -> Bool {
 }
 
 func notification(for kind: ActivityKind, pr: PullRequest) -> PendingNotification {
-    let tag = "\(shortRepo(pr.repo)) #\(pr.number)"
+    let tag = "\(shortRepo(pr.repo)) \(pr.ref)"
     let title: String
     switch kind {
     case .ciPassed: title = "✅ CI passed — \(tag)"

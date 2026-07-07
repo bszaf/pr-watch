@@ -34,7 +34,7 @@ struct MenuBarView: View {
                                     Text(pr.glyph)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(pr.title).lineLimit(1)
-                                        Text(verbatim: "\(pr.repo) #\(pr.number)").font(.caption).foregroundStyle(.secondary)
+                                        Text(verbatim: "\(pr.repo) \(pr.ref)").font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                 }

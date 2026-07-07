@@ -1,13 +1,15 @@
 import Foundation
 import Observation
 
-/// Owns the PR list, the polling timer, the diff→notify pipeline, and the activity feed.
+/// Owns the merged PR list (across providers), the polling timer, the diff→notify
+/// pipeline, per-provider auth status, and the activity feed.
 @MainActor
 @Observable
 final class PRStore {
     private(set) var pullRequests: [PullRequest] = []
     private(set) var activity: [ActivityEvent] = []
-    private(set) var viewerLogin = ""
+    private(set) var viewerLogins: [Provider: String] = [:]
+    private(set) var providerStatus: [Provider: ProviderStatus] = [:]
     private(set) var lastError: String?
     private(set) var lastUpdated: Date?
     private(set) var nextPollDate: Date?
@@ -19,26 +21,27 @@ final class PRStore {
     private var snapshot: [String: SnapshotState] = [:]
     private var didInitialFetch = false
     private let snapshotKey = "prSnapshot"
+    private let viewersKey = "viewerLogins"
     private let maxActivity = 200
 
     init(settings: AppSettings) {
         self.settings = settings
         snapshot = Self.decode([String: SnapshotState].self, key: snapshotKey) ?? [:]
         activity = ActivityStore.load()
-        viewerLogin = UserDefaults.standard.string(forKey: "viewerLogin") ?? ""
-        didInitialFetch = !snapshot.isEmpty   // a persisted snapshot means we can notify immediately
+        viewerLogins = Self.decode([Provider: String].self, key: viewersKey) ?? [:]
+        didInitialFetch = !snapshot.isEmpty
     }
 
-    /// A PR I authored (vs. one I'm only reviewing / watching).
+    /// A PR I authored (vs. one I'm only reviewing / watching) — matched per provider.
     func isMine(_ pr: PullRequest) -> Bool {
-        !viewerLogin.isEmpty && pr.author == viewerLogin
+        guard let me = viewerLogins[pr.provider], !me.isEmpty else { return false }
+        return pr.author == me
     }
 
     func start() {
-        Task { await refresh() }   // refresh() arms the next poll
+        Task { await refresh() }
     }
 
-    /// Re-arm the timer using the current poll interval (call after Settings changes).
     func restartTimer() { scheduleNextPoll() }
 
     private func scheduleNextPoll() {
@@ -50,6 +53,8 @@ final class PRStore {
         }
     }
 
+    private struct Loaded { let prs: [PullRequest]; let status: ProviderStatus }
+
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -58,24 +63,63 @@ final class PRStore {
             scheduleNextPoll()
         }
 
-        let client = GitHubClient(
-            authored: settings.watchAuthored,
-            reviewRequested: settings.watchReviewRequested,
-            repoFilter: settings.repoFilter,
-            customPRs: settings.customPRs
-        )
-        do {
-            let result = try await client.fetch()
-            lastError = nil
-            lastUpdated = Date()
-            if let login = result.viewerLogin, !login.isEmpty {
-                viewerLogin = login
-                UserDefaults.standard.set(login, forKey: "viewerLogin")
+        // Fetch enabled providers concurrently.
+        async let gh: Loaded? = settings.watchGitHub ? load(.github) : nil
+        async let gl: Loaded? = settings.watchGitLab ? load(.gitlab) : nil
+        let results: [Provider: Loaded?] = [.github: await gh, .gitlab: await gl]
+
+        var merged: [PullRequest] = []
+        var statuses: [Provider: ProviderStatus] = [:]
+        var errors: [String] = []
+        for provider in Provider.allCases {
+            if let loaded = results[provider] ?? nil {
+                statuses[provider] = loaded.status
+                merged += loaded.prs
+                if let user = loaded.status.user, !user.isEmpty { viewerLogins[provider] = user }
+                if let err = loaded.status.error { errors.append("\(provider.label): \(err)") }
+            } else {
+                // Disabled — keep last known identity for the status line.
+                statuses[provider] = ProviderStatus(
+                    enabled: false, source: providerStatus[provider]?.source ?? .none,
+                    user: viewerLogins[provider], error: nil)
             }
-            diffAndNotify(result.prs)
-            pullRequests = result.prs.sorted { $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo }
+        }
+
+        providerStatus = statuses
+        UserDefaults.standard.set(try? JSONEncoder().encode(viewerLogins), forKey: viewersKey)
+        lastUpdated = Date()
+        lastError = merged.isEmpty && !errors.isEmpty ? errors.joined(separator: "\n") : nil
+
+        diffAndNotify(merged)
+        pullRequests = merged.sorted {
+            $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo
+        }
+    }
+
+    /// Fetch one provider, translating success/failure into a `Loaded` (never throws).
+    private func load(_ provider: Provider) async -> Loaded {
+        do {
+            let result: ProviderResult
+            switch provider {
+            case .github:
+                result = try await GitHubClient(
+                    authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
+                    repoFilter: settings.repoFilter, customPRs: settings.customPRs).fetch()
+            case .gitlab:
+                result = try await GitLabClient(
+                    authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
+                    repoFilter: settings.repoFilter, host: settings.gitlabHost).fetch()
+            }
+            return Loaded(prs: result.prs, status: ProviderStatus(
+                enabled: true, source: result.source, user: result.viewerLogin, error: nil))
         } catch {
-            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // Preserve last-known source/user so the status line stays informative.
+            var status = providerStatus[provider] ?? ProviderStatus(enabled: true, source: .none, user: nil, error: nil)
+            status.enabled = true
+            status.user = viewerLogins[provider]
+            status.error = msg
+            return Loaded(prs: [], status: status)
         }
     }
 
@@ -92,8 +136,7 @@ final class PRStore {
                 for kind in transitions(for: pr, previous: snapshot[pr.id]) {
                     events.append(ActivityEvent(
                         date: Date(), prId: pr.id, repo: pr.repo,
-                        number: pr.number, title: pr.title, url: pr.url, kind: kind
-                    ))
+                        number: pr.number, ref: pr.ref, title: pr.title, url: pr.url, kind: kind))
                     if isEnabled(kind, triggers) {
                         let n = notification(for: kind, pr: pr)
                         Notifier.notify(title: n.title, body: n.body, url: pr.url)
@@ -101,12 +144,15 @@ final class PRStore {
                 }
             }
             if !events.isEmpty {
-                activity.insert(contentsOf: events.reversed(), at: 0)   // newest first
+                activity.insert(contentsOf: events.reversed(), at: 0)
                 if activity.count > maxActivity { activity = Array(activity.prefix(maxActivity)) }
             }
         }
-        saveActivity()   // keep the on-disk log current (and present) every refresh
-        snapshot = Dictionary(uniqueKeysWithValues: prs.map { ($0.id, SnapshotState($0)) })
+        saveActivity()
+        snapshot = Dictionary(uniqueKeysWithValues: prs.map { pr in
+            let mergeable = resolvedMergeable(pr.mergeable, previous: snapshot[pr.id]?.mergeable)
+            return (pr.id, SnapshotState(ciState: pr.ciState, reviewDecision: pr.reviewDecision, mergeable: mergeable))
+        })
         UserDefaults.standard.set(try? JSONEncoder().encode(snapshot), forKey: snapshotKey)
         didInitialFetch = true
     }

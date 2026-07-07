@@ -36,6 +36,7 @@ struct ActivityEvent: Identifiable, Codable, Sendable, Equatable {
     let prId: String
     let repo: String
     let number: Int
+    var ref: String?          // "#123" / "!123"; optional for backward-compat with v1 files
     let title: String
     let url: String
     let kind: ActivityKind

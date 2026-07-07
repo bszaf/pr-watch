@@ -192,7 +192,7 @@ struct ActivityRow: View {
                     .foregroundStyle(color).font(.system(size: 14)).frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(event.kind.label).fontWeight(.medium)
-                    Text(verbatim: "\(event.repo) #\(event.number) · \(event.title)")
+                    Text(verbatim: "\(event.repo) \(event.ref ?? "#\(event.number)") · \(event.title)")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
@@ -218,7 +218,7 @@ struct PRRow: View {
     let pr: PullRequest
 
     private var subtitle: String {
-        let base = "\(pr.repo) #\(pr.number)"
+        let base = "\(pr.repo) \(pr.ref)"
         return pr.author.isEmpty ? base : "\(base) · @\(pr.author)"
     }
 

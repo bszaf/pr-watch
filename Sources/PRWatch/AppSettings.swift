@@ -11,6 +11,11 @@ final class AppSettings {
     var notifyReview: Bool { didSet { d.set(notifyReview, forKey: "notifyReview") } }
     var notifyConflicts: Bool { didSet { d.set(notifyConflicts, forKey: "notifyConflicts") } }
 
+    // Providers
+    var watchGitHub: Bool { didSet { d.set(watchGitHub, forKey: "watchGitHub") } }
+    var watchGitLab: Bool { didSet { d.set(watchGitLab, forKey: "watchGitLab") } }
+    var gitlabHost: String { didSet { d.set(gitlabHost, forKey: "gitlabHost") } }
+
     // Watch scope
     var watchAuthored: Bool { didSet { d.set(watchAuthored, forKey: "watchAuthored") } }
     var watchReviewRequested: Bool { didSet { d.set(watchReviewRequested, forKey: "watchReviewRequested") } }
@@ -32,7 +37,13 @@ final class AppSettings {
             "watchAuthored": true,
             "watchReviewRequested": false,
             "repoFilter": "",
+            "watchGitHub": true,
+            "watchGitLab": true,
+            "gitlabHost": "https://gitlab.com",
         ])
+        watchGitHub = d.bool(forKey: "watchGitHub")
+        watchGitLab = d.bool(forKey: "watchGitLab")
+        gitlabHost = d.string(forKey: "gitlabHost") ?? "https://gitlab.com"
         pollInterval = d.integer(forKey: "pollInterval")
         notifyCI = d.bool(forKey: "notifyCI")
         notifyReview = d.bool(forKey: "notifyReview")

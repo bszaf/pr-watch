@@ -1,13 +1,12 @@
 import Foundation
 import Security
 
-/// Minimal Keychain wrapper for the optional GitHub PAT. The token is the only
-/// secret we store, so a single generic-password item is enough.
+/// Minimal Keychain wrapper for optional per-provider PATs (one generic-password item
+/// per account, e.g. "github-pat" / "gitlab-pat").
 enum Keychain {
     private static let service = "com.bszaf.prwatch"
-    private static let account = "github-pat"
 
-    static func readToken() -> String? {
+    static func readToken(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -24,8 +23,8 @@ enum Keychain {
         return token
     }
 
-    static func setToken(_ token: String) {
-        deleteToken()
+    static func setToken(_ token: String, account: String) {
+        deleteToken(account: account)
         guard !token.isEmpty else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -37,7 +36,7 @@ enum Keychain {
         SecItemAdd(query as CFDictionary, nil)
     }
 
-    static func deleteToken() {
+    static func deleteToken(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
