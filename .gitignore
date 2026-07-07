@@ -1,0 +1,17 @@
+# SwiftPM build products
+.build/
+Package.resolved
+
+# Assembled/signed app bundle (produced by build.sh)
+*.app/
+
+# macOS
+.DS_Store
+
+# Xcode/SwiftPM local state
+*.xcodeproj
+.swiftpm/
+DerivedData/
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
