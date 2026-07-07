@@ -1,8 +1,9 @@
 # PR Watch
 
-A native macOS desktop app **and** menu-bar item that watches your GitHub pull requests
-and posts a desktop banner when something changes — CI finishes, a review lands, or a
-branch develops a merge conflict.
+A native macOS desktop app **and** menu-bar item that watches your **GitHub** pull requests
+**and GitLab** merge requests — concurrently, merged into one view — and posts a desktop
+banner when something changes: CI finishes, a review lands, or a branch develops a merge
+conflict.
 
 Built with SwiftUI (`MenuBarExtra` + `WindowGroup`). No Xcode required — SwiftPM plus a
 hand-assembled, ad-hoc-signed `.app` bundle (this machine is Command Line Tools only).
@@ -12,9 +13,12 @@ hand-assembled, ad-hoc-signed `.app` bundle (this machine is Command Line Tools 
 - **macOS 14+** on Apple Silicon.
 - **Swift toolchain** — Xcode *or* just the Command Line Tools (`xcode-select --install`).
   No Xcode/`xcodebuild` needed; the build uses SwiftPM directly.
-- **GitHub auth** — the [`gh` CLI](https://cli.github.com) logged in (`gh auth login`), or a
-  personal access token you paste into Settings. The app never stores a token on disk (it
-  reuses `gh` or keeps a pasted PAT in the macOS Keychain).
+- **Provider auth** (at least one):
+  - **GitHub** — the [`gh` CLI](https://cli.github.com) logged in (`gh auth login`), or a PAT.
+  - **GitLab** — the [`glab` CLI](https://gitlab.com/gitlab-org/cli), or a PAT with `read_api`
+    scope pasted in Settings (gitlab.com or a self-managed host).
+  The app never stores a token on disk — it reuses `gh`/`glab`, or keeps a pasted PAT in the
+  macOS Keychain (per provider).
 
 ## How to start it
 
@@ -48,16 +52,21 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
 
 ## How it works
 
-- **Auth** — reuses your `gh` CLI login: resolves a token via `/bin/zsh -lc 'gh auth token'`
-  (falling back to `/opt/homebrew/bin/gh`). Optionally paste a fine-grained **PAT** in
-  Settings; it's stored only in the **macOS Keychain**, never on disk.
-- **Fetch** — one GraphQL `search` query per poll pulls open PRs with their CI check
-  rollup, review decision, and mergeable state. Scope is configurable (authored /
-  review-requested / limited to a single `owner/repo`).
+- **Providers** — GitHub and GitLab are fetched **concurrently** each poll and merged into
+  one list. Each is independently toggleable; per-provider token resolution is
+  **Keychain PAT → CLI (`gh`/`glab`) → env var**. A provider with no credentials is simply
+  "not configured" (no error), and one provider failing never blanks the other's results.
+- **Fetch** —
+  - *GitHub*: one GraphQL `search` query for authored / review-requested PRs (+ any
+    individually-watched PRs), with CI check rollup, review decision, and mergeable state.
+  - *GitLab*: GraphQL `currentUser.authoredMergeRequests` / `reviewRequestedMergeRequests`,
+    mapping pipeline status → CI, `conflicts` → merge conflict, `approved` → review. Refs
+    render as `!123` (GitLab) vs `#123` (GitHub).
 - **Poll & diff** — `PRStore` polls on a timer (default 60s), snapshots each PR's
-  `(ci, review, mergeable)` state to `UserDefaults`, and notifies only on a *transition*
-  that matches an enabled trigger. The first fetch after launch never notifies (no spam
-  for pre-existing state).
+  `(ci, review, mergeable)` state, and notifies only on a *transition* that matches an
+  enabled trigger. The first fetch after launch never notifies (no spam for pre-existing
+  state). `mergeable == UNKNOWN` (which GitHub computes asynchronously and flaps into) is
+  treated as "no new info", so a `CONFLICTING→UNKNOWN→CONFLICTING` flap won't re-notify.
 - **Notify** — `UNUserNotifications` banners (clickable — opens the PR in your browser),
   with an `osascript` fallback if UN isn't authorized. Test button in Settings.
 
@@ -65,8 +74,8 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
 
 Three tabs (segmented control in the toolbar):
 
-- **My PRs** — PRs you authored (`author == viewer`).
-- **Other PRs** — PRs where you're a reviewer or that you explicitly watch.
+- **My PRs** — PRs/MRs you authored (matched against each provider's own viewer).
+- **Other PRs** — ones where you're a reviewer or that you explicitly watch.
 - **Activity** — a persisted history of every change (CI, reviews, conflicts) with
   timestamps; click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
@@ -77,13 +86,16 @@ limit + individually-watched PRs), and a manual refresh.
 
 ## Settings
 
-- **Notifications**: toggle CI / review / merge-conflict triggers; "Send test notification".
-- **Watch scope**: authored PRs and/or PRs awaiting your review (repo limit + watched PRs
-  live in the window's filter popover).
-- **Polling**: 30s / 1m / 2m / 5m.
-- **GitHub token**: paste/clear a PAT (Keychain); blank = reuse `gh` login.
-- **Startup**: opt-in "Launch at login" (installs a launchd LaunchAgent pointing at the
-  bundle).
+Preferences are a native tabbed window:
+
+- **General** — poll interval (30s / 1m / 2m / 5m), watch scope (authored and/or
+  review-requested), and opt-in "Launch at login" (installs a launchd LaunchAgent).
+- **Notifications** — CI / review / merge-conflict trigger toggles + "Send test notification".
+- **Accounts** — enable/disable **GitHub** and **GitLab**, each showing its active source
+  (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), plus a PAT field (Keychain)
+  and, for GitLab, the host URL. Blank PAT = reuse the CLI login.
+
+Repo limit and individually-watched PRs live in the main window's filter popover.
 
 ## Layout
 
@@ -93,15 +105,17 @@ Sources/PRWatch/
   PRWatchApp.swift         @main: WindowGroup + MenuBarExtra + Settings; UN click handling
   ContentView.swift        window: My/Other/Activity tabs, filter popover, status glyphs
   MenuBarView.swift        menu-bar dropdown: compact list + refresh/window/settings/quit
-  SettingsView.swift       triggers, scope, poll interval, PAT, launch-at-login, test notif
-  PRStore.swift            @Observable @MainActor: polling timer + diff→notify + activity
-  GitHubClient.swift       token resolution + GraphQL fetch (viewer/authored/review/custom)
+  SettingsView.swift       tabbed prefs: General / Notifications / Accounts
+  PRStore.swift            @Observable @MainActor: concurrent multi-provider fetch + diff→notify
+  Provider.swift           Provider enum, token source, per-provider status model
+  GitHubClient.swift       GitHub token resolution + GraphQL (viewer/authored/review/custom)
+  GitLabClient.swift       GitLab token resolution + GraphQL (currentUser MRs) → shared model
   NotificationRules.swift  pure transition→activity/notification logic (unit-tested)
-  Activity.swift           ActivityEvent + ActivityKind (history feed model)
+  Activity.swift           ActivityEvent + ActivityKind + versioned file store
   Notifier.swift           UNUserNotifications (clickable) + osascript fallback
-  Keychain.swift           PAT storage
+  Keychain.swift           per-provider PAT storage
   AppSettings.swift        @Observable settings persisted to UserDefaults
   LaunchAgent.swift        install/remove launchd LaunchAgent
-Tests/PRWatchTests/        Swift Testing suites (rules + PR parsing)
+Tests/PRWatchTests/        Swift Testing suites (rules + mergeable dedupe + PR parsing)
 build.sh / test.sh
 ```
