@@ -79,6 +79,7 @@ struct ContentView: View {
             }
         }
         .font(.caption).foregroundStyle(.secondary)
+        .padding(.leading, 8)
         .help("Time until the next automatic refresh")
     }
 
