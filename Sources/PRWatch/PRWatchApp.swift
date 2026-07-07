@@ -1,0 +1,73 @@
+import SwiftUI
+import UserNotifications
+
+@main
+struct PRWatchApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var store: PRStore
+
+    init() {
+        _store = State(initialValue: PRStore(settings: AppSettings()))
+    }
+
+    var body: some Scene {
+        WindowGroup("PR Watch", id: "PR Watch") {
+            ContentView()
+                .environment(store)
+                .frame(minWidth: 640, idealWidth: 800, minHeight: 520, idealHeight: 680)
+                .task { store.start() }
+        }
+        .windowResizability(.contentMinSize)
+
+        MenuBarExtra {
+            MenuBarView()
+                .environment(store)
+        } label: {
+            Label(menuBarCount, systemImage: "checklist")
+        }
+        .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environment(store)
+        }
+    }
+
+    private var menuBarCount: String {
+        let n = store.pullRequests.count
+        return n == 0 ? "" : "\(n)"
+    }
+}
+
+/// Owns UNUserNotifications setup + click handling (opens the PR in the browser).
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            Notifier.useUserNotifications = granted
+        }
+    }
+
+    // Show banners even while the app is frontmost.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    // Clicking a banner opens the PR.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if let urlString = response.notification.request.content.userInfo["url"] as? String,
+           let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
+        completionHandler()
+    }
+}
