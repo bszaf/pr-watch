@@ -1,0 +1,60 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15   # Apple Silicon + Xcode 16 (Swift 6, needed for swift-tools 6.0)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build & assemble app bundle
+        env:
+          CI: "true"          # tells build.sh not to `open` the app
+        run: ./build.sh release
+
+      - name: Package .app into a zip
+        run: ditto -c -k --sequesterRsrc --keepParent "PR Watch.app" "PR-Watch.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PR-Watch
+          path: PR-Watch.zip
+
+      - name: Publish rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          Automated build from \`main\` @ ${GITHUB_SHA}.
+
+          **Ad-hoc signed & unnotarized.** After downloading and unzipping, clear the
+          quarantine flag before first launch (otherwise Gatekeeper blocks it):
+
+          \`\`\`
+          xattr -dr com.apple.quarantine "PR Watch.app"
+          \`\`\`
+          EOF
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest "PR-Watch.zip" \
+            --title "Latest build (${GITHUB_SHA:0:7})" \
+            --notes-file notes.md \
+            --prerelease \
+            --target "${GITHUB_SHA}"

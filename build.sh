@@ -35,6 +35,11 @@ PLIST
 echo "==> ad-hoc codesign"
 codesign --force --deep --sign - "${APP}"
 
-echo "==> launching"
-open "${APP}"
-echo "Done: ${APP}"
+# Skip launching in CI / when NO_OPEN is set (headless build & package).
+if [ -n "${CI:-}" ] || [ -n "${NO_OPEN:-}" ]; then
+  echo "Done (not launching — CI/NO_OPEN set): ${APP}"
+else
+  echo "==> launching"
+  open "${APP}"
+  echo "Done: ${APP}"
+fi
