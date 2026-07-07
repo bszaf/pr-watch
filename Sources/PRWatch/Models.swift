@@ -51,9 +51,20 @@ struct SnapshotState: Codable, Equatable, Sendable {
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
 
-    init(_ pr: PullRequest) {
-        ciState = pr.ciState
-        reviewDecision = pr.reviewDecision
-        mergeable = pr.mergeable
+    init(ciState: CheckState?, reviewDecision: ReviewDecision?, mergeable: Mergeable) {
+        self.ciState = ciState
+        self.reviewDecision = reviewDecision
+        self.mergeable = mergeable
     }
+
+    init(_ pr: PullRequest) {
+        self.init(ciState: pr.ciState, reviewDecision: pr.reviewDecision, mergeable: pr.mergeable)
+    }
+}
+
+/// GitHub computes `mergeable` asynchronously, so it flaps to `UNKNOWN` between polls.
+/// Treat `UNKNOWN` as "no new info" and carry the last known state forward, so a
+/// CONFLICTING→UNKNOWN→CONFLICTING flap doesn't re-fire a conflict notification.
+func resolvedMergeable(_ current: Mergeable, previous: Mergeable?) -> Mergeable {
+    current == .unknown ? (previous ?? .unknown) : current
 }
