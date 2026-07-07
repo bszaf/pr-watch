@@ -62,11 +62,17 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
   - *GitLab*: GraphQL `currentUser.authoredMergeRequests` / `reviewRequestedMergeRequests`,
     mapping pipeline status → CI, `conflicts` → merge conflict, `approved` → review. Refs
     render as `!123` (GitLab) vs `#123` (GitHub).
-- **Poll & diff** — `PRStore` polls on a timer (default 60s), snapshots each PR's
+- **Poll & diff** — `PRStore` polls on an **adaptive timer**, snapshots each PR's
   `(ci, review, mergeable)` state, and notifies only on a *transition* that matches an
   enabled trigger. The first fetch after launch never notifies (no spam for pre-existing
   state). `mergeable == UNKNOWN` (which GitHub computes asynchronously and flaps into) is
   treated as "no new info", so a `CONFLICTING→UNKNOWN→CONFLICTING` flap won't re-notify.
+- **Adaptive polling** — polls every **15s while something is in flight** (a CI run is
+  pending, or a change was seen in the last 2 min) and relaxes to your **configured idle
+  interval** otherwise. GitHub GraphQL costs ~1–5 of 5,000 points/hour, so even the 15s
+  tier is a small fraction of the budget. (GraphQL can't use HTTP ETag conditional
+  requests, and the ETag-capable REST feeds don't report CI, so adaptive cadence — not
+  ETag — is the effective lever here.)
 - **Notify** — `UNUserNotifications` banners (clickable — opens the PR in your browser),
   with an `osascript` fallback if UN isn't authorized. Test button in Settings.
 
@@ -88,8 +94,9 @@ limit + individually-watched PRs), and a manual refresh.
 
 Preferences are a native tabbed window:
 
-- **General** — poll interval (30s / 1m / 2m / 5m), watch scope (authored and/or
-  review-requested), and opt-in "Launch at login" (installs a launchd LaunchAgent).
+- **General** — **idle** poll interval (30s / 1m / 2m / 5m; the app polls at 15s while CI is
+  running — see Adaptive polling), watch scope (authored and/or review-requested), and
+  opt-in "Launch at login" (installs a launchd LaunchAgent).
 - **Notifications** — CI / review / merge-conflict trigger toggles + "Send test notification".
 - **Accounts** — enable/disable **GitHub** and **GitLab**, each showing its active source
   (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), plus a PAT field (Keychain)

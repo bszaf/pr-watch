@@ -1,6 +1,13 @@
 import Foundation
 import Observation
 
+/// Adaptive poll cadence: poll fast (`fast`) while something is likely to change soon —
+/// a CI run is in flight or a change was seen recently — otherwise fall back to the
+/// user's configured `idle` interval. Pure for testability.
+func adaptiveInterval(anyPending: Bool, recentlyChanged: Bool, idle: Int, fast: Int = 15) -> TimeInterval {
+    (anyPending || recentlyChanged) ? TimeInterval(fast) : TimeInterval(max(fast, idle))
+}
+
 /// Owns the merged PR list (across providers), the polling timer, the diff→notify
 /// pipeline, per-provider auth status, and the activity feed.
 @MainActor
@@ -19,6 +26,8 @@ final class PRStore {
 
     private var timer: Timer?
     private var snapshot: [String: SnapshotState] = [:]
+    private var lastChangeAt: Date?
+    private let recentChangeWindow: TimeInterval = 120
     private var didInitialFetch = false
     private let snapshotKey = "prSnapshot"
     private let viewersKey = "viewerLogins"
@@ -46,7 +55,9 @@ final class PRStore {
 
     private func scheduleNextPoll() {
         timer?.invalidate()
-        let interval = TimeInterval(max(15, settings.pollInterval))
+        let anyPending = pullRequests.contains { $0.ciState == .pending || $0.ciState == .expected }
+        let recentlyChanged = lastChangeAt.map { Date().timeIntervalSince($0) < recentChangeWindow } ?? false
+        let interval = adaptiveInterval(anyPending: anyPending, recentlyChanged: recentlyChanged, idle: settings.pollInterval)
         nextPollDate = Date().addingTimeInterval(interval)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
@@ -146,6 +157,7 @@ final class PRStore {
             if !events.isEmpty {
                 activity.insert(contentsOf: events.reversed(), at: 0)
                 if activity.count > maxActivity { activity = Array(activity.prefix(maxActivity)) }
+                lastChangeAt = Date()   // keep polling fast for a bit after any change
             }
         }
         saveActivity()
