@@ -54,7 +54,8 @@ func notification(for kind: ActivityKind, pr: PullRequest) -> PendingNotificatio
     case .reviewRequested: title = "👀 Review requested — \(tag)"
     case .conflict: title = "⚠️ Merge conflict — \(tag)"
     }
-    return PendingNotification(title: title, body: pr.title)
+    let body = pr.author.isEmpty ? pr.title : "@\(pr.author) · \(pr.title)"
+    return PendingNotification(title: title, body: body)
 }
 
 /// Convenience used by tests and banner-only callers: enabled transitions as banners.

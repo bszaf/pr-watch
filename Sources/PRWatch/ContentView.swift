@@ -216,6 +216,11 @@ struct ActivityRow: View {
 struct PRRow: View {
     let pr: PullRequest
 
+    private var subtitle: String {
+        let base = "\(pr.repo) #\(pr.number)"
+        return pr.author.isEmpty ? base : "\(base) · @\(pr.author)"
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             StatusIcons(pr: pr)
@@ -228,7 +233,7 @@ struct PRRow: View {
                             .help("This PR is a draft")
                     }
                 }
-                Text(verbatim: "\(pr.repo) #\(pr.number)").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Button {
@@ -247,17 +252,27 @@ struct PRRow: View {
 struct StatusIcons: View {
     let pr: PullRequest
 
+    // Fixed-width slots so CI / review / conflict icons line up in columns across rows.
     var body: some View {
-        HStack(spacing: 6) {
-            icon(ciSymbol, ciColor).help(ciHelp)
-            if let review = pr.reviewDecision {
-                icon(reviewSymbol(review), reviewColor(review)).help(reviewHelp(review))
+        HStack(spacing: 4) {
+            slot { icon(ciSymbol, ciColor).help(ciHelp) }
+            slot {
+                if let review = pr.reviewDecision {
+                    icon(reviewSymbol(review), reviewColor(review)).help(reviewHelp(review))
+                }
             }
-            if pr.mergeable == .conflicting {
-                icon("exclamationmark.triangle.fill", .orange)
-                    .help("Merge conflict — this branch needs a rebase/merge before it can land")
+            slot {
+                if pr.mergeable == .conflicting {
+                    icon("exclamationmark.triangle.fill", .orange)
+                        .help("Merge conflict — this branch needs a rebase/merge before it can land")
+                }
             }
         }
+    }
+
+    // A sized transparent base holds the column open even when the icon is absent.
+    private func slot<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        Color.clear.frame(width: 16, height: 16).overlay { content() }
     }
 
     private func icon(_ name: String, _ color: Color) -> some View {
