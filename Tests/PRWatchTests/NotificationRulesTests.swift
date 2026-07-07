@@ -70,6 +70,21 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
         #expect(n.first?.title.contains("Approved") == true)
     }
 
+    // GitHub's mergeable flaps to UNKNOWN between polls; that must not re-fire conflicts.
+    @Test func unknownMergeableCarriesLastKnownForward() {
+        #expect(resolvedMergeable(.unknown, previous: .conflicting) == .conflicting)
+        #expect(resolvedMergeable(.unknown, previous: .mergeable) == .mergeable)
+        #expect(resolvedMergeable(.unknown, previous: nil) == .unknown)
+        #expect(resolvedMergeable(.conflicting, previous: .mergeable) == .conflicting)
+    }
+
+    @Test func conflictDoesNotRefireAfterUnknownFlap() {
+        // With last-known carried forward, a re-observed CONFLICTING is not a new transition.
+        let prev = SnapshotState(ciState: nil, reviewDecision: nil, mergeable: .conflicting)
+        let n = notifications(for: pr(mergeable: .conflicting), previous: prev, triggers: allOn)
+        #expect(n.isEmpty)
+    }
+
     @Test func multipleTransitionsStack() {
         let prev = SnapshotState(pr(ci: .pending, review: .reviewRequired, mergeable: .mergeable))
         let n = notifications(
