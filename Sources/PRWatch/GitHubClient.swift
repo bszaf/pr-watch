@@ -154,7 +154,7 @@ struct GitHubClient {
     }
 
     private static let prFields = """
-    number title url isDraft
+    number title url isDraft headRefName
     author { login }
     repository { nameWithOwner }
     reviewDecision
@@ -214,6 +214,7 @@ private struct GraphQLResponse: Decodable {
         let isDraft: Bool?
         let author: Author?
         let repository: Repo?
+        let headRefName: String?
         let reviewDecision: ReviewDecision?
         let mergeable: Mergeable?
         let commits: Commits?
@@ -242,6 +243,7 @@ private struct GraphQLResponse: Decodable {
                 isDraft: isDraft ?? false,
                 repo: repo,
                 author: author?.login ?? "",
+                headBranch: headRefName,
                 reviewDecision: reviewDecision,
                 mergeable: mergeable ?? .unknown,
                 ciState: commits?.nodes.first?.commit.statusCheckRollup?.state

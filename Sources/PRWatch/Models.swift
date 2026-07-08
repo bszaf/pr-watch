@@ -33,6 +33,7 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let isDraft: Bool
     let repo: String          // owner/repo (GitHub) or group/project (GitLab)
     let author: String
+    let headBranch: String?   // head/source branch — used to match a local worktree
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
     let ciState: CheckState?

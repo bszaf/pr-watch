@@ -190,6 +190,11 @@ struct ProjectsView: View {
 
 struct ProjectRow: View {
     let project: LocalProject
+    @Environment(PRStore.self) private var store
+
+    private var matchedPR: PullRequest? {
+        store.pullRequests.first { $0.repo == project.repo && $0.headBranch == project.branch }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -208,6 +213,16 @@ struct ProjectRow: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            if let pr = matchedPR {
+                Button {
+                    if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
+                } label: {
+                    Label(pr.ref, systemImage: "arrow.triangle.pull")
+                        .labelStyle(.titleAndIcon).font(.caption).lineLimit(1)
+                }
+                .buttonStyle(.plain).foregroundStyle(.green)
+                .help("Open PR: \(pr.title)")
+            }
             Button {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
             } label: {
@@ -272,6 +287,7 @@ struct ActivityRow: View {
 
 struct PRRow: View {
     let pr: PullRequest
+    @Environment(ProjectStore.self) private var projects
 
     private var subtitle: String {
         let base = "\(pr.repo) \(pr.ref)"
@@ -293,6 +309,16 @@ struct PRRow: View {
                 Text(verbatim: subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if let project = projects.project(for: pr) {
+                Button {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+                } label: {
+                    Label(project.name, systemImage: "folder.fill")
+                        .labelStyle(.titleAndIcon).font(.caption).lineLimit(1)
+                }
+                .buttonStyle(.plain).foregroundStyle(.blue)
+                .help("Local worktree: \(project.path)")
+            }
             Button {
                 if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
             } label: {

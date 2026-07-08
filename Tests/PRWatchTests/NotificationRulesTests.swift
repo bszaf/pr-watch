@@ -9,7 +9,7 @@ private func pr(
     PullRequest(
         id: "github:Acme/app#1", provider: .github, number: 1, title: "Test PR",
         url: "https://example.com", isDraft: false, repo: "Acme/app",
-        author: "bszaf", reviewDecision: review, mergeable: mergeable, ciState: ci
+        author: "bszaf", headBranch: nil, reviewDecision: review, mergeable: mergeable, ciState: ci
     )
 }
 
