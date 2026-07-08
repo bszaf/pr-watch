@@ -23,6 +23,9 @@ final class AppSettings {
     /// Explicitly-watched PRs, each "owner/repo#number".
     var customPRs: [String] { didSet { d.set(customPRs, forKey: "customPRs") } }
 
+    /// Directories scanned for local git projects (Projects tab).
+    var scanRoots: [String] { didSet { d.set(scanRoots, forKey: "scanRoots") } }
+
     var launchAtLogin: Bool { didSet { d.set(launchAtLogin, forKey: "launchAtLogin") } }
 
     private let d = UserDefaults.standard
@@ -52,6 +55,7 @@ final class AppSettings {
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
         repoFilter = d.string(forKey: "repoFilter") ?? ""
         customPRs = d.stringArray(forKey: "customPRs") ?? []
+        scanRoots = d.stringArray(forKey: "scanRoots") ?? ["~/projects"]
         launchAtLogin = d.bool(forKey: "launchAtLogin")
     }
 }

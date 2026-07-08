@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(PRStore.self) private var store
+    @Environment(ProjectStore.self) private var projects
     @State private var tab: Tab = .mine
     @State private var showFilters = false
 
@@ -9,6 +10,7 @@ struct ContentView: View {
         case mine = "My PRs"
         case others = "Other PRs"
         case activity = "Activity"
+        case projects = "Projects"
         var id: String { rawValue }
     }
 
@@ -22,7 +24,7 @@ struct ContentView: View {
                             ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                         }
                         .pickerStyle(.segmented)
-                        .frame(minWidth: 280)
+                        .frame(minWidth: 360)
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
                         if tab == .activity && !store.activity.isEmpty {
@@ -33,6 +35,7 @@ struct ContentView: View {
                         filterButton
                         Button {
                             Task { await store.refresh() }
+                            Task { await projects.scan() }
                         } label: {
                             Image(systemName: "arrow.clockwise")
                         }
@@ -48,6 +51,7 @@ struct ContentView: View {
         case .mine: prList(store.pullRequests.filter { store.isMine($0) }, emptyLabel: "No PRs of yours")
         case .others: prList(store.pullRequests.filter { !store.isMine($0) }, emptyLabel: "No PRs to review")
         case .activity: ActivityView()
+        case .projects: ProjectsView()
         }
     }
 
@@ -161,6 +165,58 @@ struct FilterPopover: View {
         }
         newPR = ""
         Task { await store.refresh() }
+    }
+}
+
+struct ProjectsView: View {
+    @Environment(ProjectStore.self) private var projects
+
+    var body: some View {
+        Group {
+            if projects.projects.isEmpty {
+                ContentUnavailableView(
+                    projects.isScanning ? "Scanning…" : "No projects found",
+                    systemImage: "folder",
+                    description: Text("Add folders to scan in Settings → General → Project folders.")
+                )
+            } else {
+                List(projects.projects) { ProjectRow(project: $0) }
+                    .listStyle(.inset)
+            }
+        }
+        .task { await projects.scan() }
+    }
+}
+
+struct ProjectRow: View {
+    let project: LocalProject
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder.fill").foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(project.name).fontWeight(.medium)
+                    if let branch = project.branch {
+                        Label(branch, systemImage: "arrow.triangle.branch")
+                            .labelStyle(.titleAndIcon).font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.secondary.opacity(0.15), in: Capsule())
+                    }
+                }
+                Text(verbatim: project.repo ?? project.path)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+            } label: {
+                Image(systemName: "arrow.up.forward.square")
+            }
+            .buttonStyle(.borderless)
+            .help("Reveal in Finder")
+        }
+        .padding(.vertical, 2)
     }
 }
 

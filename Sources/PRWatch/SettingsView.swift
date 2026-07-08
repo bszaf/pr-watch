@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     var body: some View {
@@ -18,11 +19,31 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(PRStore.self) private var store
+    @Environment(ProjectStore.self) private var projects
     @State private var launchMsg = ""
 
     var body: some View {
         @Bindable var settings = store.settings
         Form {
+            Section("Project folders") {
+                Text("Scanned for local git projects, shown in the Projects tab.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(settings.scanRoots, id: \.self) { root in
+                    HStack {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text(root).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            settings.scanRoots.removeAll { $0 == root }
+                            Task { await projects.scan() }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                }
+                Button("Add folder…", action: addFolder)
+            }
             Section("Polling") {
                 Picker("Check every", selection: $settings.pollInterval) {
                     Text("30 seconds").tag(30)
@@ -57,6 +78,20 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func addFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK else { return }
+        let settings = store.settings
+        for url in panel.urls where !settings.scanRoots.contains(url.path) {
+            settings.scanRoots.append(url.path)
+        }
+        Task { await projects.scan() }
     }
 }
 
