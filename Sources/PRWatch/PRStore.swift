@@ -115,11 +115,11 @@ final class PRStore {
             case .github:
                 result = try await GitHubClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
-                    repoFilter: settings.repoFilter, customPRs: settings.customPRs).fetch()
+                    repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch()
             case .gitlab:
                 result = try await GitLabClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
-                    repoFilter: settings.repoFilter, host: settings.gitlabHost).fetch()
+                    repoFilters: settings.repoFilters, host: settings.gitlabHost).fetch()
             }
             return Loaded(prs: result.prs, status: ProviderStatus(
                 enabled: true, source: result.source, user: result.viewerLogin, error: nil))

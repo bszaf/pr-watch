@@ -19,12 +19,17 @@ final class AppSettings {
     // Watch scope
     var watchAuthored: Bool { didSet { d.set(watchAuthored, forKey: "watchAuthored") } }
     var watchReviewRequested: Bool { didSet { d.set(watchReviewRequested, forKey: "watchReviewRequested") } }
-    var repoFilter: String { didSet { d.set(repoFilter, forKey: "repoFilter") } }
+    /// Repositories (owner/name) to limit watching to. Empty = all repos.
+    var repoFilters: [String] { didSet { d.set(repoFilters, forKey: "repoFilters") } }
     /// Explicitly-watched PRs, each "owner/repo#number".
     var customPRs: [String] { didSet { d.set(customPRs, forKey: "customPRs") } }
 
     /// Directories scanned for local git projects (Projects tab).
     var scanRoots: [String] { didSet { d.set(scanRoots, forKey: "scanRoots") } }
+
+    /// Terminal used to open a project ("iterm" | "terminal" | "custom").
+    var terminalApp: String { didSet { d.set(terminalApp, forKey: "terminalApp") } }
+    var customTerminalCommand: String { didSet { d.set(customTerminalCommand, forKey: "customTerminalCommand") } }
 
     var launchAtLogin: Bool { didSet { d.set(launchAtLogin, forKey: "launchAtLogin") } }
 
@@ -39,7 +44,6 @@ final class AppSettings {
             "notifyConflicts": true,
             "watchAuthored": true,
             "watchReviewRequested": false,
-            "repoFilter": "",
             "watchGitHub": true,
             "watchGitLab": true,
             "gitlabHost": "https://gitlab.com",
@@ -53,9 +57,12 @@ final class AppSettings {
         notifyConflicts = d.bool(forKey: "notifyConflicts")
         watchAuthored = d.bool(forKey: "watchAuthored")
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
-        repoFilter = d.string(forKey: "repoFilter") ?? ""
+        let legacyRepoFilter = d.string(forKey: "repoFilter") ?? ""
+        repoFilters = d.stringArray(forKey: "repoFilters") ?? (legacyRepoFilter.isEmpty ? [] : [legacyRepoFilter])
         customPRs = d.stringArray(forKey: "customPRs") ?? []
         scanRoots = d.stringArray(forKey: "scanRoots") ?? ["~/projects"]
+        terminalApp = d.string(forKey: "terminalApp") ?? "iterm"
+        customTerminalCommand = d.string(forKey: "customTerminalCommand") ?? "open -a Ghostty {path}"
         launchAtLogin = d.bool(forKey: "launchAtLogin")
     }
 }

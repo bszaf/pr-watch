@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(PRStore.self) private var store
     @Environment(ProjectStore.self) private var projects
+    @Environment(\.openSettings) private var openSettings
     @State private var tab: Tab = .mine
     @State private var showFilters = false
 
@@ -33,6 +34,10 @@ struct ContentView: View {
                         }
                         countdown
                         filterButton
+                        Button { openSettings() } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .help("Settings")
                         Button {
                             Task { await store.refresh() }
                             Task { await projects.scan() }
@@ -93,14 +98,14 @@ struct ContentView: View {
         } label: {
             Image(systemName: hasFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
-        .help("Repo filter & watched PRs")
+        .help("Watched PRs")
         .popover(isPresented: $showFilters, arrowEdge: .bottom) {
             FilterPopover().frame(width: 340)
         }
     }
 
     private var hasFilter: Bool {
-        !store.settings.repoFilter.isEmpty || !store.settings.customPRs.isEmpty
+        !store.settings.customPRs.isEmpty
     }
 }
 
@@ -113,15 +118,6 @@ struct FilterPopover: View {
         @Bindable var settings = store.settings
 
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Limit to repository").font(.subheadline).bold()
-                TextField("owner/name (blank = all)", text: $settings.repoFilter)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await store.refresh() } }
-            }
-
-            Divider()
-
             VStack(alignment: .leading, spacing: 6) {
                 Text("Watch a specific PR").font(.subheadline).bold()
                 HStack {
@@ -168,19 +164,36 @@ struct FilterPopover: View {
     }
 }
 
+/// The real Finder icon for a path (consistent folder representation everywhere).
+struct FolderIcon: View {
+    let path: String
+    var size: CGFloat = 16
+    var body: some View {
+        Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+            .resizable().frame(width: size, height: size)
+    }
+}
+
 struct ProjectsView: View {
     @Environment(ProjectStore.self) private var projects
 
+    // Honor the repository filter (Settings → Repositories); empty = all.
+    private var shown: [LocalProject] {
+        let filters = projects.settings.repoFilters
+        guard !filters.isEmpty else { return projects.projects }
+        return projects.projects.filter { $0.repo.map(filters.contains) ?? false }
+    }
+
     var body: some View {
         Group {
-            if projects.projects.isEmpty {
+            if shown.isEmpty {
                 ContentUnavailableView(
                     projects.isScanning ? "Scanning…" : "No projects found",
                     systemImage: "folder",
                     description: Text("Add folders to scan in Settings → General → Project folders.")
                 )
             } else {
-                List(projects.projects) { ProjectRow(project: $0) }
+                List(shown) { ProjectRow(project: $0) }
                     .listStyle(.inset)
             }
         }
@@ -198,7 +211,7 @@ struct ProjectRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "folder.fill").foregroundStyle(.blue)
+            FolderIcon(path: project.path)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(project.name).fontWeight(.medium)
@@ -224,14 +237,20 @@ struct ProjectRow: View {
                 .help("Open PR: \(pr.title)")
             }
             Button {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+                TerminalLauncher.open(path: project.path, settings: store.settings)
             } label: {
-                Image(systemName: "arrow.up.forward.square")
+                Image(systemName: "terminal")
             }
             .buttonStyle(.borderless)
-            .help("Reveal in Finder")
+            .help("Open in terminal")
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Button("Open in Terminal") { TerminalLauncher.open(path: project.path, settings: store.settings) }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+            }
+        }
     }
 }
 
@@ -311,13 +330,19 @@ struct PRRow: View {
             Spacer()
             if let project = projects.project(for: pr) {
                 Button {
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+                    TerminalLauncher.open(path: project.path, settings: projects.settings)
                 } label: {
-                    Label(project.name, systemImage: "folder.fill")
+                    Label(project.name, systemImage: "terminal")
                         .labelStyle(.titleAndIcon).font(.caption).lineLimit(1)
                 }
                 .buttonStyle(.plain).foregroundStyle(.blue)
-                .help("Local worktree: \(project.path)")
+                .help("Open worktree in terminal: \(project.path)")
+                .contextMenu {
+                    Button("Open in Terminal") { TerminalLauncher.open(path: project.path, settings: projects.settings) }
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path)
+                    }
+                }
             }
             Button {
                 if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }

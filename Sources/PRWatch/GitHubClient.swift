@@ -23,13 +23,13 @@ enum GitHubError: LocalizedError {
 struct GitHubClient {
     let authored: Bool
     let reviewRequested: Bool
-    let repoFilter: String       // "" = all repos
+    let repoFilters: [String]    // owner/repo list; empty = all repos
     let customPRs: [String]      // "owner/repo#number"
 
-    init(authored: Bool, reviewRequested: Bool, repoFilter: String, customPRs: [String]) {
+    init(authored: Bool, reviewRequested: Bool, repoFilters: [String], customPRs: [String]) {
         self.authored = authored
         self.reviewRequested = reviewRequested
-        self.repoFilter = repoFilter.trimmingCharacters(in: .whitespaces)
+        self.repoFilters = repoFilters.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         self.customPRs = customPRs
     }
 
@@ -148,8 +148,9 @@ struct GitHubClient {
     }
 
     private func qString(_ who: String) -> String {
+        // Multiple `repo:` qualifiers are OR-ed by GitHub search.
         var terms = ["is:open", "is:pr", who]
-        if !repoFilter.isEmpty { terms.append("repo:\(repoFilter)") }
+        terms += repoFilters.map { "repo:\($0)" }
         return terms.joined(separator: " ")
     }
 
