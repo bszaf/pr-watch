@@ -17,38 +17,55 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            tabContent
-                .navigationTitle("PR Watch")
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        Picker("View", selection: $tab) {
-                            ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(minWidth: 360)
+            VStack(spacing: 0) {
+                tabContent
+                Divider()
+                footer
+            }
+            .navigationTitle("PR Watch")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("View", selection: $tab) {
+                        ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                     }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        if tab == .activity && !store.activity.isEmpty {
-                            Button("Clear") { store.clearActivity() }
-                                .help("Clear the activity history")
-                        }
-                        countdown
-                        filterButton
-                        Button { openSettings() } label: {
-                            Image(systemName: "gearshape")
-                        }
-                        .help("Settings")
-                        Button {
-                            Task { await store.refresh() }
-                            Task { await projects.scan() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .disabled(store.isRefreshing)
-                        .help("Refresh now")
-                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(minWidth: 340)
                 }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if tab == .activity && !store.activity.isEmpty {
+                        Button { store.clearActivity() } label: {
+                            Label("Clear activity", systemImage: "trash")
+                        }
+                        .help("Clear the activity history")
+                    }
+                    filterButton
+                    Button { openSettings() } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Settings")
+                }
+            }
         }
+    }
+
+    /// Bottom status bar: poll countdown + refresh, kept out of the titlebar.
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Spacer()
+            countdown
+            Button {
+                Task { await store.refresh() }
+                Task { await projects.scan() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .disabled(store.isRefreshing)
+            .help("Refresh now")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.bar)
     }
 
     @ViewBuilder private var tabContent: some View {
@@ -96,7 +113,7 @@ struct ContentView: View {
         Button {
             showFilters.toggle()
         } label: {
-            Image(systemName: hasFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            Label("Watched PRs", systemImage: hasFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
         .help("Watched PRs")
         .popover(isPresented: $showFilters, arrowEdge: .bottom) {
