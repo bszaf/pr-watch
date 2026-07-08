@@ -102,7 +102,7 @@ struct GitLabClient {
     }
 
     private static let mrFields = """
-    iid title webUrl draft conflicts approved
+    iid title webUrl draft conflicts approved sourceBranch
     author { username }
     project { fullPath }
     headPipeline { status }
@@ -130,6 +130,7 @@ private struct GLResponse: Decodable {
         let draft: Bool?
         let conflicts: Bool?
         let approved: Bool?
+        let sourceBranch: String?
         let author: Author?
         let project: Project?
         let headPipeline: Pipeline?
@@ -150,6 +151,7 @@ private struct GLResponse: Decodable {
                 isDraft: draft ?? false,
                 repo: repo,
                 author: author?.username ?? "",
+                headBranch: sourceBranch,
                 reviewDecision: (approved == true) ? .approved : nil,
                 mergeable: (conflicts == true) ? .conflicting : .mergeable,
                 ciState: Self.mapCI(headPipeline?.status)

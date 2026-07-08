@@ -73,6 +73,8 @@ final class ProjectStore {
     private(set) var isScanning = false
     let settings: AppSettings
 
+    private var byRepoBranch: [String: LocalProject] = [:]
+
     init(settings: AppSettings) { self.settings = settings }
 
     func scan() async {
@@ -80,6 +82,20 @@ final class ProjectStore {
         isScanning = true
         let roots = settings.scanRoots
         projects = await Task.detached { ProjectScanner.scan(roots: roots) }.value
+        byRepoBranch = Dictionary(
+            projects.compactMap { p in Self.key(p.repo, p.branch).map { ($0, p) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         isScanning = false
+    }
+
+    /// The local project matching a PR's repo + head branch, if any.
+    func project(for pr: PullRequest) -> LocalProject? {
+        Self.key(pr.repo, pr.headBranch).flatMap { byRepoBranch[$0] }
+    }
+
+    private static func key(_ repo: String?, _ branch: String?) -> String? {
+        guard let repo, let branch else { return nil }
+        return "\(repo)\u{0}\(branch)"
     }
 }
