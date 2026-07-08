@@ -5,15 +5,19 @@ import UserNotifications
 struct PRWatchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store: PRStore
+    @State private var projects: ProjectStore
 
     init() {
-        _store = State(initialValue: PRStore(settings: AppSettings()))
+        let settings = AppSettings()
+        _store = State(initialValue: PRStore(settings: settings))
+        _projects = State(initialValue: ProjectStore(settings: settings))
     }
 
     var body: some Scene {
         WindowGroup("PR Watch", id: "PR Watch") {
             ContentView()
                 .environment(store)
+                .environment(projects)
                 .frame(minWidth: 640, idealWidth: 800, minHeight: 520, idealHeight: 680)
                 .task { store.start() }
         }
@@ -30,6 +34,7 @@ struct PRWatchApp: App {
         Settings {
             SettingsView()
                 .environment(store)
+                .environment(projects)
         }
     }
 
