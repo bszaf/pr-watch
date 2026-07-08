@@ -20,6 +20,7 @@ struct PRWatchApp: App {
                 .environment(projects)
                 .frame(minWidth: 640, idealWidth: 800, minHeight: 520, idealHeight: 680)
                 .task { store.start() }
+                .task { await projects.scan() }
         }
         .windowResizability(.contentMinSize)
 

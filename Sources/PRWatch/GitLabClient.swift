@@ -5,13 +5,13 @@ import Foundation
 struct GitLabClient {
     let authored: Bool
     let reviewRequested: Bool
-    let repoFilter: String     // client-side filter on project fullPath ("" = all)
+    let repoFilters: [String]  // client-side filter on project fullPath; empty = all
     let host: String           // base URL, e.g. "https://gitlab.com"
 
-    init(authored: Bool, reviewRequested: Bool, repoFilter: String, host: String) {
+    init(authored: Bool, reviewRequested: Bool, repoFilters: [String], host: String) {
         self.authored = authored
         self.reviewRequested = reviewRequested
-        self.repoFilter = repoFilter.trimmingCharacters(in: .whitespaces)
+        self.repoFilters = repoFilters.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let trimmed = host.trimmingCharacters(in: .whitespaces)
         self.host = trimmed.isEmpty ? "https://gitlab.com" : trimmed
     }
@@ -86,7 +86,7 @@ struct GitLabClient {
         var result: [PullRequest] = []
         for node in (user.authored?.nodes ?? []) + (user.reviewRequested?.nodes ?? []) {
             guard let pr = node.toPullRequest() else { continue }
-            if !repoFilter.isEmpty, pr.repo != repoFilter { continue }
+            if !repoFilters.isEmpty, !repoFilters.contains(pr.repo) { continue }
             if seen.insert(pr.id).inserted { result.append(pr) }
         }
         return ProviderResult(prs: result, viewerLogin: user.username, source: resolved.source)

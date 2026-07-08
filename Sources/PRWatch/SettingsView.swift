@@ -21,6 +21,7 @@ private struct GeneralSettings: View {
     @Environment(PRStore.self) private var store
     @Environment(ProjectStore.self) private var projects
     @State private var launchMsg = ""
+    @State private var newRepo = ""
 
     var body: some View {
         @Bindable var settings = store.settings
@@ -44,6 +45,19 @@ private struct GeneralSettings: View {
                 }
                 Button("Add folder…", action: addFolder)
             }
+            Section("Open projects in") {
+                Picker("Terminal", selection: $settings.terminalApp) {
+                    ForEach(TerminalApp.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                if settings.terminalApp == TerminalApp.custom.rawValue {
+                    TextField("Command ({path} = project path)", text: $settings.customTerminalCommand)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Example: open -a Ghostty {path}")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Opening iTerm2/Terminal may prompt for Automation permission the first time.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Polling") {
                 Picker("Check every", selection: $settings.pollInterval) {
                     Text("30 seconds").tag(30)
@@ -58,8 +72,45 @@ private struct GeneralSettings: View {
                     .onChange(of: settings.watchAuthored) { Task { await store.refresh() } }
                 Toggle("PRs awaiting my review", isOn: $settings.watchReviewRequested)
                     .onChange(of: settings.watchReviewRequested) { Task { await store.refresh() } }
-                Text("Repo limit and individually-watched PRs live in the main window.")
+                Text("Individually-watched PRs live in the main window's filter.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Repositories") {
+                Text("Limit watching to these repos (owner/name). Empty = all repos.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(settings.repoFilters, id: \.self) { repo in
+                    HStack {
+                        Image(systemName: "shippingbox").foregroundStyle(.secondary)
+                        Text(repo).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            settings.repoFilters.removeAll { $0 == repo }
+                            Task { await store.refresh() }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    TextField("owner/name", text: $newRepo)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(addRepo)
+                    Button("Add", action: addRepo)
+                        .disabled(newRepo.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if !repoSuggestions.isEmpty {
+                        Menu {
+                            ForEach(repoSuggestions, id: \.self) { repo in
+                                Button(repo) { add(repo) }
+                            }
+                        } label: {
+                            Image(systemName: "sparkles")
+                        }
+                        .menuStyle(.borderlessButton).fixedSize()
+                        .help("Suggestions from local projects and open PRs")
+                    }
+                }
             }
             Section("Startup") {
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
@@ -78,6 +129,27 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Distinct repos seen locally or in open PRs, minus ones already filtered.
+    private var repoSuggestions: [String] {
+        let current = Set(store.settings.repoFilters)
+        let fromPRs = store.pullRequests.map(\.repo)
+        let fromProjects = projects.projects.compactMap(\.repo)
+        return Array(Set(fromPRs + fromProjects).subtracting(current)).sorted()
+    }
+
+    private func add(_ repo: String) {
+        guard !store.settings.repoFilters.contains(repo) else { return }
+        store.settings.repoFilters.append(repo)
+        Task { await store.refresh() }
+    }
+
+    private func addRepo() {
+        let repo = newRepo.trimmingCharacters(in: .whitespaces)
+        guard !repo.isEmpty else { return }
+        add(repo)
+        newRepo = ""
     }
 
     private func addFolder() {
