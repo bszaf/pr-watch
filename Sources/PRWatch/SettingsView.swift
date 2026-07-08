@@ -6,58 +6,27 @@ struct SettingsView: View {
         TabView {
             GeneralSettings()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            SourcesSettings()
+                .tabItem { Label("Sources", systemImage: "point.3.filled.connected.trianglepath.dotted") }
+            ProjectsSettings()
+                .tabItem { Label("Projects", systemImage: "folder") }
             NotificationSettings()
                 .tabItem { Label("Notifications", systemImage: "bell") }
-            AccountSettings()
-                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
         }
-        .frame(width: 460)
+        // Fixed size so the window doesn't resize when switching tabs.
+        .frame(width: 480, height: 560)
     }
 }
 
-// MARK: - General
+// MARK: - General (app behavior)
 
 private struct GeneralSettings: View {
     @Environment(PRStore.self) private var store
-    @Environment(ProjectStore.self) private var projects
     @State private var launchMsg = ""
-    @State private var newRepo = ""
 
     var body: some View {
         @Bindable var settings = store.settings
         Form {
-            Section("Project folders") {
-                Text("Scanned for local git projects, shown in the Projects tab.")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(settings.scanRoots, id: \.self) { root in
-                    HStack {
-                        Image(systemName: "folder").foregroundStyle(.secondary)
-                        Text(root).lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        Button {
-                            settings.scanRoots.removeAll { $0 == root }
-                            Task { await projects.scan() }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                    }
-                }
-                Button("Add folder…", action: addFolder)
-            }
-            Section("Open projects in") {
-                Picker("Terminal", selection: $settings.terminalApp) {
-                    ForEach(TerminalApp.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                if settings.terminalApp == TerminalApp.custom.rawValue {
-                    TextField("Command ({path} = project path)", text: $settings.customTerminalCommand)
-                        .textFieldStyle(.roundedBorder)
-                    Text("Example: open -a Ghostty {path}")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Text("Opening iTerm2/Terminal may prompt for Automation permission the first time.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             Section("Polling") {
                 Picker("Check every", selection: $settings.pollInterval) {
                     Text("30 seconds").tag(30)
@@ -66,6 +35,59 @@ private struct GeneralSettings: View {
                     Text("5 minutes").tag(300)
                 }
                 .onChange(of: settings.pollInterval) { store.restartTimer() }
+                Text("Idle cadence — the app polls every 15s while CI is running.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Startup") {
+                Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                    .onChange(of: settings.launchAtLogin) { _, on in
+                        if on, !LaunchAgent.install() {
+                            settings.launchAtLogin = false
+                            launchMsg = "Run from the built .app bundle to enable launch at login."
+                        } else if !on {
+                            LaunchAgent.uninstall()
+                        }
+                    }
+                if !launchMsg.isEmpty {
+                    Text(launchMsg).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Sources (providers + what to watch)
+
+private struct SourcesSettings: View {
+    @Environment(PRStore.self) private var store
+    @Environment(ProjectStore.self) private var projects
+    @State private var ghPAT = ""
+    @State private var glPAT = ""
+    @State private var newRepo = ""
+    @State private var statusMsg = ""
+
+    var body: some View {
+        @Bindable var settings = store.settings
+        Form {
+            Section("GitHub") {
+                Toggle("Watch GitHub", isOn: $settings.watchGitHub)
+                    .onChange(of: settings.watchGitHub) { Task { await store.refresh() } }
+                statusLine(.github)
+                SecureField("Personal access token (blank = use gh CLI)", text: $ghPAT)
+                    .textFieldStyle(.roundedBorder)
+                tokenButtons(provider: .github, input: $ghPAT, blankHint: "gh login")
+            }
+            Section("GitLab") {
+                Toggle("Watch GitLab", isOn: $settings.watchGitLab)
+                    .onChange(of: settings.watchGitLab) { Task { await store.refresh() } }
+                statusLine(.gitlab)
+                TextField("Host", text: $settings.gitlabHost)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await store.refresh() } }
+                SecureField("Personal access token (read_api; blank = use glab)", text: $glPAT)
+                    .textFieldStyle(.roundedBorder)
+                tokenButtons(provider: .gitlab, input: $glPAT, blankHint: "glab / no CLI")
             }
             Section("Watch scope") {
                 Toggle("PRs I authored", isOn: $settings.watchAuthored)
@@ -75,7 +97,6 @@ private struct GeneralSettings: View {
                 Text("Individually-watched PRs live in the main window's filter.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-
             Section("Repositories") {
                 Text("Limit watching to these repos (owner/name). Empty = all repos.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -91,6 +112,7 @@ private struct GeneralSettings: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Remove \(repo)").accessibilityLabel("Remove \(repo)")
                     }
                 }
                 HStack {
@@ -112,23 +134,41 @@ private struct GeneralSettings: View {
                     }
                 }
             }
-            Section("Startup") {
-                Toggle("Launch at login", isOn: $settings.launchAtLogin)
-                    .onChange(of: settings.launchAtLogin) { _, on in
-                        if on, !LaunchAgent.install() {
-                            settings.launchAtLogin = false
-                            launchMsg = "Run from the built .app bundle to enable launch at login."
-                        } else if !on {
-                            LaunchAgent.uninstall()
-                        }
-                    }
-                if !launchMsg.isEmpty {
-                    Text(launchMsg).font(.caption).foregroundStyle(.secondary)
-                }
+            if !statusMsg.isEmpty {
+                Section { Text(statusMsg).font(.caption).foregroundStyle(.secondary) }
             }
         }
         .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func statusLine(_ provider: Provider) -> some View {
+        let status = store.providerStatus[provider]
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Using: \(status?.summary(for: provider) ?? "\(provider.rawValue) — not checked")")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error = status?.error {
+                Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+            }
+        }
+    }
+
+    private func tokenButtons(provider: Provider, input: Binding<String>, blankHint: String) -> some View {
+        HStack {
+            Button("Save token") {
+                Keychain.setToken(input.wrappedValue.trimmingCharacters(in: .whitespaces),
+                                  account: provider.keychainAccount)
+                input.wrappedValue = ""
+                flash("\(provider.label) token saved to Keychain.")
+                Task { await store.refresh() }
+            }
+            .disabled(input.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Clear token") {
+                Keychain.deleteToken(account: provider.keychainAccount)
+                flash("\(provider.label) token cleared — falling back to \(blankHint).")
+                Task { await store.refresh() }
+            }
+            .disabled(Keychain.readToken(account: provider.keychainAccount) == nil)
+        }
     }
 
     /// Distinct repos seen locally or in open PRs, minus ones already filtered.
@@ -150,6 +190,62 @@ private struct GeneralSettings: View {
         guard !repo.isEmpty else { return }
         add(repo)
         newRepo = ""
+    }
+
+    /// Show a status message that auto-clears (unless superseded).
+    private func flash(_ message: String) {
+        statusMsg = message
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if statusMsg == message { statusMsg = "" }
+        }
+    }
+}
+
+// MARK: - Projects (local projects feature)
+
+private struct ProjectsSettings: View {
+    @Environment(PRStore.self) private var store
+    @Environment(ProjectStore.self) private var projects
+
+    var body: some View {
+        @Bindable var settings = store.settings
+        Form {
+            Section("Project folders") {
+                Text("Scanned for local git projects, shown in the Projects tab.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(settings.scanRoots, id: \.self) { root in
+                    HStack {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text(root).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            settings.scanRoots.removeAll { $0 == root }
+                            Task { await projects.scan() }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Remove \(root)").accessibilityLabel("Remove folder")
+                    }
+                }
+                Button("Add folder…", action: addFolder)
+            }
+            Section("Open projects in") {
+                Picker("Terminal", selection: $settings.terminalApp) {
+                    ForEach(TerminalApp.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                if settings.terminalApp == TerminalApp.custom.rawValue {
+                    TextField("Command ({path} = project path)", text: $settings.customTerminalCommand)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Example: open -a Ghostty {path}")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Opening iTerm2/Terminal may prompt for Automation permission the first time.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 
     private func addFolder() {
@@ -189,74 +285,5 @@ private struct NotificationSettings: View {
             }
         }
         .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-// MARK: - Accounts
-
-private struct AccountSettings: View {
-    @Environment(PRStore.self) private var store
-    @State private var ghPAT = ""
-    @State private var glPAT = ""
-    @State private var statusMsg = ""
-
-    var body: some View {
-        @Bindable var settings = store.settings
-        Form {
-            Section("GitHub") {
-                Toggle("Watch GitHub", isOn: $settings.watchGitHub)
-                    .onChange(of: settings.watchGitHub) { Task { await store.refresh() } }
-                statusLine(.github)
-                SecureField("Personal access token (blank = use gh CLI)", text: $ghPAT)
-                    .textFieldStyle(.roundedBorder)
-                tokenButtons(provider: .github, input: $ghPAT, blankHint: "gh login")
-            }
-            Section("GitLab") {
-                Toggle("Watch GitLab", isOn: $settings.watchGitLab)
-                    .onChange(of: settings.watchGitLab) { Task { await store.refresh() } }
-                statusLine(.gitlab)
-                TextField("Host", text: $settings.gitlabHost)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await store.refresh() } }
-                SecureField("Personal access token (read_api; blank = use glab)", text: $glPAT)
-                    .textFieldStyle(.roundedBorder)
-                tokenButtons(provider: .gitlab, input: $glPAT, blankHint: "glab / no CLI")
-            }
-            if !statusMsg.isEmpty {
-                Section { Text(statusMsg).font(.caption).foregroundStyle(.secondary) }
-            }
-        }
-        .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder private func statusLine(_ provider: Provider) -> some View {
-        let status = store.providerStatus[provider]
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Using: \(status?.summary(for: provider) ?? "\(provider.rawValue) — not checked")")
-                .font(.caption).foregroundStyle(.secondary)
-            if let error = status?.error {
-                Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
-            }
-        }
-    }
-
-    private func tokenButtons(provider: Provider, input: Binding<String>, blankHint: String) -> some View {
-        HStack {
-            Button("Save token") {
-                Keychain.setToken(input.wrappedValue.trimmingCharacters(in: .whitespaces),
-                                  account: provider.keychainAccount)
-                input.wrappedValue = ""
-                statusMsg = "\(provider.label) token saved to Keychain."
-                Task { await store.refresh() }
-            }
-            .disabled(input.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Clear token") {
-                Keychain.deleteToken(account: provider.keychainAccount)
-                statusMsg = "\(provider.label) token cleared — falling back to \(blankHint)."
-                Task { await store.refresh() }
-            }
-        }
     }
 }
