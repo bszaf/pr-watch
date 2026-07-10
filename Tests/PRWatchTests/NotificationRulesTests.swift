@@ -12,7 +12,9 @@ private func pr(
         id: "github:Acme/app#1", provider: .github, number: 1, title: "Test PR",
         url: "https://example.com", isDraft: false, repo: "Acme/app",
         author: "bszaf", headBranch: nil, reviewDecision: review, mergeable: mergeable, ciState: ci,
-        approvers: approvers, changeRequesters: changeRequesters
+        approvers: approvers, changeRequesters: changeRequesters,
+        pendingReviewers: [], baseBranch: nil, additions: nil, deletions: nil,
+        labels: [], comments: nil, updatedAt: nil
     )
 }
 
