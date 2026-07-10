@@ -1,9 +1,9 @@
 # PR Watch
 
 A native macOS desktop app **and** menu-bar item that watches your **GitHub** pull requests
-**and GitLab** merge requests — concurrently, merged into one view — and posts a desktop
-banner when something changes: CI finishes, a review lands, or a branch develops a merge
-conflict.
+**and GitLab** merge requests — concurrently, merged into one view — posts a desktop banner
+when something changes (CI finishes, a review lands, a branch develops a merge conflict), and
+links each PR to its **local git worktree** so you can jump straight into a terminal.
 
 Built with SwiftUI (`MenuBarExtra` + `WindowGroup`). No Xcode required — SwiftPM plus a
 hand-assembled, ad-hoc-signed `.app` bundle (this machine is Command Line Tools only).
@@ -33,7 +33,7 @@ first launch macOS asks to allow notifications — **click Allow** (needed for c
 banners; otherwise it falls back to a non-clickable banner).
 
 You'll get:
-- a **window** with *My PRs / Other PRs / Activity* tabs, and
+- a **window** with *My PRs / Other PRs / Activity / Projects* tabs, and
 - a **menu-bar item** (a ✓ checklist icon + open-PR count) with a quick dropdown.
 
 Daily use: just double-click **`PR Watch.app`** (or `open "PR Watch.app"`). To run it at
@@ -74,11 +74,12 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
   requests, and the ETag-capable REST feeds don't report CI, so adaptive cadence — not
   ETag — is the effective lever here.)
 - **Notify** — `UNUserNotifications` banners (clickable — opens the PR in your browser),
-  with an `osascript` fallback if UN isn't authorized. Test button in Settings.
+  with an `osascript` fallback if UN isn't authorized. Approval/changes banners name the
+  reviewer (e.g. *"👍 Approved by @alice — alto #123"*). Test button in Settings.
 
 ## Window
 
-Three tabs (segmented control in the toolbar):
+Tabs (segmented control in the titlebar):
 
 - **My PRs** — PRs/MRs you authored (matched against each provider's own viewer).
 - **Other PRs** — ones where you're a reviewer or that you explicitly watch.
@@ -86,23 +87,36 @@ Three tabs (segmented control in the toolbar):
   timestamps; click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
   so the format can evolve without breaking old data.
+- **Projects** — local git projects/worktrees found under your configurable scan folders
+  (Settings → Projects), each showing branch + origin repo, opened in your terminal.
 
-The toolbar also has a live **countdown to the next poll**, a **filter popover** (repo
-limit + individually-watched PRs), and a manual refresh.
+**Expandable PR rows** — click a PR to reveal details: reviewers (approved / changes /
+**pending**), metadata (base branch, +/−, labels, updated, comments), and the matched local
+worktree with Terminal/Finder actions.
+
+**PR ↔ project correlation** — matched on `owner/repo` + head branch. A PR with a local
+worktree shows a terminal chip (opens the worktree); a Projects row shows a chip back to its
+open PR.
+
+A bottom **status bar** shows the live poll countdown + refresh; the titlebar also holds the
+**Watched PRs** popover (individually-watched PRs) and **Settings**.
 
 ## Settings
 
-Preferences are a native tabbed window:
+Native tabbed preferences:
 
-- **General** — **idle** poll interval (30s / 1m / 2m / 5m; the app polls at 15s while CI is
-  running — see Adaptive polling), watch scope (authored and/or review-requested), and
-  opt-in "Launch at login" (installs a launchd LaunchAgent).
+- **General** — **idle** poll interval (30s / 1m / 2m / 5m; polls at 15s while CI is running —
+  see Adaptive polling) and opt-in "Launch at login" (installs a launchd LaunchAgent).
+- **Sources** — enable/disable **GitHub** and **GitLab**, each showing its active source
+  (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), a Keychain PAT field, and (for
+  GitLab) the host URL; **watch scope** (authored and/or review-requested); and
+  **Repositories** — a list limiting which repos to watch (empty = all), with suggestions
+  drawn from local projects and open PRs.
+- **Projects** — folders to scan for local git projects, and which **terminal** to open a
+  project in (iTerm2 new tab / Terminal / custom `{path}` command).
 - **Notifications** — CI / review / merge-conflict trigger toggles + "Send test notification".
-- **Accounts** — enable/disable **GitHub** and **GitLab**, each showing its active source
-  (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), plus a PAT field (Keychain)
-  and, for GitLab, the host URL. Blank PAT = reuse the CLI login.
 
-Repo limit and individually-watched PRs live in the main window's filter popover.
+Individually-watched PRs live in the main window's **Watched PRs** popover.
 
 ## Layout
 
@@ -110,13 +124,15 @@ Repo limit and individually-watched PRs live in the main window's filter popover
 Package.swift              executable target, macOS 14, Swift 5 language mode
 Sources/PRWatch/
   PRWatchApp.swift         @main: WindowGroup + MenuBarExtra + Settings; UN click handling
-  ContentView.swift        window: My/Other/Activity tabs, filter popover, status glyphs
+  ContentView.swift        window: titlebar tabs, expandable PR rows, Projects, status footer
   MenuBarView.swift        menu-bar dropdown: compact list + refresh/window/settings/quit
-  SettingsView.swift       tabbed prefs: General / Notifications / Accounts
+  SettingsView.swift       tabbed prefs: General / Sources / Projects / Notifications
   PRStore.swift            @Observable @MainActor: concurrent multi-provider fetch + diff→notify
   Provider.swift           Provider enum, token source, per-provider status model
   GitHubClient.swift       GitHub token resolution + GraphQL (viewer/authored/review/custom)
   GitLabClient.swift       GitLab token resolution + GraphQL (currentUser MRs) → shared model
+  LocalProjects.swift      local git-project scanner + store (Projects tab, PR correlation)
+  TerminalLauncher.swift   open a project in iTerm2 / Terminal / a custom command
   NotificationRules.swift  pure transition→activity/notification logic (unit-tested)
   Activity.swift           ActivityEvent + ActivityKind + versioned file store
   Notifier.swift           UNUserNotifications (clickable) + osascript fallback
