@@ -104,6 +104,7 @@ struct GitLabClient {
     private static let mrFields = """
     iid title webUrl draft conflicts approved sourceBranch
     author { username }
+    approvedBy { nodes { username } }
     project { fullPath }
     headPipeline { status }
     """
@@ -132,10 +133,15 @@ private struct GLResponse: Decodable {
         let approved: Bool?
         let sourceBranch: String?
         let author: Author?
+        let approvedBy: Users?
         let project: Project?
         let headPipeline: Pipeline?
 
         struct Author: Decodable { let username: String? }
+        struct Users: Decodable {
+            let nodes: [U]
+            struct U: Decodable { let username: String? }
+        }
         struct Project: Decodable { let fullPath: String }
         struct Pipeline: Decodable { let status: String? }
 
@@ -154,7 +160,9 @@ private struct GLResponse: Decodable {
                 headBranch: sourceBranch,
                 reviewDecision: (approved == true) ? .approved : nil,
                 mergeable: (conflicts == true) ? .conflicting : .mergeable,
-                ciState: Self.mapCI(headPipeline?.status)
+                ciState: Self.mapCI(headPipeline?.status),
+                approvers: approvedBy?.nodes.compactMap { $0.username } ?? [],
+                changeRequesters: []
             )
         }
 

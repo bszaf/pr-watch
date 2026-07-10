@@ -159,6 +159,7 @@ struct GitHubClient {
     author { login }
     repository { nameWithOwner }
     reviewDecision
+    latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
     mergeable
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     """
@@ -217,11 +218,16 @@ private struct GraphQLResponse: Decodable {
         let repository: Repo?
         let headRefName: String?
         let reviewDecision: ReviewDecision?
+        let latestOpinionatedReviews: Reviews?
         let mergeable: Mergeable?
         let commits: Commits?
 
         struct Author: Decodable { let login: String? }
         struct Repo: Decodable { let nameWithOwner: String }
+        struct Reviews: Decodable {
+            let nodes: [ReviewNode]
+            struct ReviewNode: Decodable { let author: Author?; let state: String? }
+        }
         struct Commits: Decodable {
             let nodes: [CommitNode]
             struct CommitNode: Decodable {
@@ -235,6 +241,7 @@ private struct GraphQLResponse: Decodable {
 
         func toPullRequest() -> PullRequest? {
             guard let number, let title, let url, let repo = repository?.nameWithOwner else { return nil }
+            let reviews = latestOpinionatedReviews?.nodes ?? []
             return PullRequest(
                 id: "github:\(repo)#\(number)",
                 provider: .github,
@@ -247,7 +254,9 @@ private struct GraphQLResponse: Decodable {
                 headBranch: headRefName,
                 reviewDecision: reviewDecision,
                 mergeable: mergeable ?? .unknown,
-                ciState: commits?.nodes.first?.commit.statusCheckRollup?.state
+                ciState: commits?.nodes.first?.commit.statusCheckRollup?.state,
+                approvers: reviews.filter { $0.state == "APPROVED" }.compactMap { $0.author?.login },
+                changeRequesters: reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login }
             )
         }
     }
