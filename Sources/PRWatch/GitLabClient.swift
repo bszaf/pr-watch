@@ -102,9 +102,12 @@ struct GitLabClient {
     }
 
     private static let mrFields = """
-    iid title webUrl draft conflicts approved sourceBranch
+    iid title webUrl draft conflicts approved sourceBranch targetBranch updatedAt userNotesCount
     author { username }
     approvedBy { nodes { username } }
+    reviewers { nodes { username } }
+    labels { nodes { title } }
+    diffStatsSummary { additions deletions }
     project { fullPath }
     headPipeline { status }
     """
@@ -132,8 +135,14 @@ private struct GLResponse: Decodable {
         let conflicts: Bool?
         let approved: Bool?
         let sourceBranch: String?
+        let targetBranch: String?
+        let updatedAt: String?
+        let userNotesCount: Int?
         let author: Author?
         let approvedBy: Users?
+        let reviewers: Users?
+        let labels: Labels?
+        let diffStatsSummary: DiffStats?
         let project: Project?
         let headPipeline: Pipeline?
 
@@ -142,6 +151,11 @@ private struct GLResponse: Decodable {
             let nodes: [U]
             struct U: Decodable { let username: String? }
         }
+        struct Labels: Decodable {
+            let nodes: [L]
+            struct L: Decodable { let title: String }
+        }
+        struct DiffStats: Decodable { let additions: Int?; let deletions: Int? }
         struct Project: Decodable { let fullPath: String }
         struct Pipeline: Decodable { let status: String? }
 
@@ -162,7 +176,17 @@ private struct GLResponse: Decodable {
                 mergeable: (conflicts == true) ? .conflicting : .mergeable,
                 ciState: Self.mapCI(headPipeline?.status),
                 approvers: approvedBy?.nodes.compactMap { $0.username } ?? [],
-                changeRequesters: []
+                changeRequesters: [],
+                pendingReviewers: {
+                    let approved = Set(approvedBy?.nodes.compactMap { $0.username } ?? [])
+                    return (reviewers?.nodes.compactMap { $0.username } ?? []).filter { !approved.contains($0) }
+                }(),
+                baseBranch: targetBranch,
+                additions: diffStatsSummary?.additions,
+                deletions: diffStatsSummary?.deletions,
+                labels: labels?.nodes.map(\.title) ?? [],
+                comments: userNotesCount,
+                updatedAt: updatedAt
             )
         }
 

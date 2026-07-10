@@ -88,8 +88,17 @@ struct ContentView: View {
             ContentUnavailableView(emptyLabel, systemImage: "checkmark.circle",
                                    description: Text("Nothing to show here right now."))
         } else {
-            List(prs) { PRRow(pr: $0) }
-                .listStyle(.inset)
+            // ScrollView + LazyVStack (not List) so expanding a row animates its height
+            // smoothly — List doesn't animate variable row heights and flickers.
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(prs) { pr in
+                        PRRow(pr: pr).padding(.horizontal, 12)
+                        Divider()
+                    }
+                }
+                .padding(.vertical, 4)
+            }
         }
     }
 
@@ -324,6 +333,7 @@ struct ActivityRow: View {
 struct PRRow: View {
     let pr: PullRequest
     @Environment(ProjectStore.self) private var projects
+    @State private var expanded = false
 
     private var subtitle: String {
         let base = "\(pr.repo) \(pr.ref)"
@@ -331,7 +341,25 @@ struct PRRow: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded {
+                PRDetail(pr: pr)
+                    .padding(.leading, 26).padding(.top, 6).padding(.bottom, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.vertical, 2)
+        .clipped()   // reveal the detail downward from the header, no overshoot flicker
+    }
+
+    private var header: some View {
         HStack(spacing: 10) {
+            Image(systemName: "chevron.right")
+                .font(.caption2).foregroundStyle(.secondary)
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+                .frame(width: 10)
             StatusIcons(pr: pr)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -369,7 +397,86 @@ struct PRRow: View {
             .buttonStyle(.borderless)
             .help("Open on GitHub")
         }
-        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }
+    }
+}
+
+/// Expanded detail for a PR: reviewers, metadata, and local worktree + actions.
+struct PRDetail: View {
+    let pr: PullRequest
+    @Environment(ProjectStore.self) private var projects
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            reviews
+            metadata
+            local
+        }
+        .font(.caption)
+    }
+
+    @ViewBuilder private var reviews: some View {
+        if pr.approvers.isEmpty && pr.changeRequesters.isEmpty && pr.pendingReviewers.isEmpty {
+            line("person.2", "No reviews yet", .secondary)
+        } else {
+            if !pr.approvers.isEmpty { line("checkmark.seal.fill", "Approved · " + names(pr.approvers), .green) }
+            if !pr.changeRequesters.isEmpty { line("hand.raised.fill", "Changes · " + names(pr.changeRequesters), .orange) }
+            if !pr.pendingReviewers.isEmpty { line("clock.fill", "Pending · " + names(pr.pendingReviewers), .secondary) }
+        }
+    }
+
+    @ViewBuilder private var metadata: some View {
+        if let base = pr.baseBranch {
+            line("arrow.triangle.branch", "\(base) ← \(pr.headBranch ?? "?")" + diffStat, .secondary)
+        }
+        if !pr.labels.isEmpty {
+            line("tag", pr.labels.joined(separator: ", "), .secondary)
+        }
+        if pr.updatedAt != nil || pr.comments != nil {
+            line("clock.arrow.circlepath", metaFooter, .secondary)
+        }
+    }
+
+    @ViewBuilder private var local: some View {
+        if let project = projects.project(for: pr) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.fill").foregroundStyle(.blue)
+                Text(project.path).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                Button("Terminal") { TerminalLauncher.open(path: project.path, settings: projects.settings) }
+                Button("Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path) }
+            }
+            .buttonStyle(.link)
+        }
+    }
+
+    private func line(_ symbol: String, _ text: String, _ color: Color) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(color).frame(width: 14)
+            Text(text).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+    }
+
+    private func names(_ logins: [String]) -> String { logins.map { "@\($0)" }.joined(separator: ", ") }
+
+    private var diffStat: String {
+        guard let a = pr.additions, let d = pr.deletions else { return "" }
+        return "  +\(a) −\(d)"
+    }
+
+    private var metaFooter: String {
+        var parts: [String] = []
+        if let updated = pr.updatedAt, let date = ISO8601DateFormatter().date(from: updated) {
+            parts.append("updated \(relative(date))")
+        }
+        if let c = pr.comments, c > 0 { parts.append("\(c) comment\(c == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func relative(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f.localizedString(for: date, relativeTo: Date())
     }
 }
 

@@ -155,11 +155,14 @@ struct GitHubClient {
     }
 
     private static let prFields = """
-    number title url isDraft headRefName
+    number title url isDraft headRefName baseRefName additions deletions updatedAt
     author { login }
     repository { nameWithOwner }
     reviewDecision
     latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
+    reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
+    labels(first: 10) { nodes { name } }
+    comments { totalCount }
     mergeable
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     """
@@ -217,8 +220,15 @@ private struct GraphQLResponse: Decodable {
         let author: Author?
         let repository: Repo?
         let headRefName: String?
+        let baseRefName: String?
+        let additions: Int?
+        let deletions: Int?
+        let updatedAt: String?
         let reviewDecision: ReviewDecision?
         let latestOpinionatedReviews: Reviews?
+        let reviewRequests: ReviewRequests?
+        let labels: Labels?
+        let comments: Count?
         let mergeable: Mergeable?
         let commits: Commits?
 
@@ -228,6 +238,16 @@ private struct GraphQLResponse: Decodable {
             let nodes: [ReviewNode]
             struct ReviewNode: Decodable { let author: Author?; let state: String? }
         }
+        struct ReviewRequests: Decodable {
+            let nodes: [RRNode]
+            struct RRNode: Decodable { let requestedReviewer: Reviewer? }
+            struct Reviewer: Decodable { let login: String?; let slug: String? }
+        }
+        struct Labels: Decodable {
+            let nodes: [LabelNode]
+            struct LabelNode: Decodable { let name: String }
+        }
+        struct Count: Decodable { let totalCount: Int }
         struct Commits: Decodable {
             let nodes: [CommitNode]
             struct CommitNode: Decodable {
@@ -256,7 +276,14 @@ private struct GraphQLResponse: Decodable {
                 mergeable: mergeable ?? .unknown,
                 ciState: commits?.nodes.first?.commit.statusCheckRollup?.state,
                 approvers: reviews.filter { $0.state == "APPROVED" }.compactMap { $0.author?.login },
-                changeRequesters: reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login }
+                changeRequesters: reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login },
+                pendingReviewers: (reviewRequests?.nodes ?? []).compactMap { $0.requestedReviewer?.login ?? $0.requestedReviewer?.slug },
+                baseBranch: baseRefName,
+                additions: additions,
+                deletions: deletions,
+                labels: (labels?.nodes ?? []).map(\.name),
+                comments: comments?.totalCount,
+                updatedAt: updatedAt
             )
         }
     }

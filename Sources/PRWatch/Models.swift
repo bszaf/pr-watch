@@ -39,6 +39,13 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let ciState: CheckState?
     let approvers: [String]          // logins who approved
     let changeRequesters: [String]   // logins who requested changes
+    let pendingReviewers: [String]   // requested but not yet reviewed
+    let baseBranch: String?
+    let additions: Int?
+    let deletions: Int?
+    let labels: [String]
+    let comments: Int?
+    let updatedAt: String?           // ISO8601
 
     /// Display reference: "#123" on GitHub, "!123" on GitLab.
     var ref: String { provider == .gitlab ? "!\(number)" : "#\(number)" }
