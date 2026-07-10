@@ -37,6 +37,8 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
     let ciState: CheckState?
+    let approvers: [String]          // logins who approved
+    let changeRequesters: [String]   // logins who requested changes
 
     /// Display reference: "#123" on GitHub, "!123" on GitLab.
     var ref: String { provider == .gitlab ? "!\(number)" : "#\(number)" }

@@ -49,8 +49,8 @@ func notification(for kind: ActivityKind, pr: PullRequest) -> PendingNotificatio
     switch kind {
     case .ciPassed: title = "✅ CI passed — \(tag)"
     case .ciFailed: title = "❌ CI failed — \(tag)"
-    case .approved: title = "👍 Approved — \(tag)"
-    case .changesRequested: title = "✋ Changes requested — \(tag)"
+    case .approved: title = "👍 Approved\(by(pr.approvers)) — \(tag)"
+    case .changesRequested: title = "✋ Changes requested\(by(pr.changeRequesters)) — \(tag)"
     case .reviewRequested: title = "👀 Review requested — \(tag)"
     case .conflict: title = "⚠️ Merge conflict — \(tag)"
     }
@@ -63,6 +63,11 @@ func notifications(for pr: PullRequest, previous: SnapshotState?, triggers: Trig
     transitions(for: pr, previous: previous)
         .filter { isEnabled($0, triggers) }
         .map { notification(for: $0, pr: pr) }
+}
+
+/// " by @alice, @bob" for the reviewers, or "" if unknown.
+private func by(_ logins: [String]) -> String {
+    logins.isEmpty ? "" : " by " + logins.map { "@\($0)" }.joined(separator: ", ")
 }
 
 /// "RiverFinancial/alto" -> "alto" for compact tags.
