@@ -42,6 +42,7 @@ struct MenuBarView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(MenuRowButtonStyle())
+                            .linkCursor()
                         }
                     }
                 }

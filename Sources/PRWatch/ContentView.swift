@@ -261,6 +261,7 @@ struct ProjectRow: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(.green)
                 .help("Open PR: \(pr.title)")
+                .linkCursor()
             }
             Button {
                 TerminalLauncher.open(path: project.path, settings: store.settings)
@@ -269,6 +270,7 @@ struct ProjectRow: View {
             }
             .buttonStyle(.borderless)
             .help("Open in terminal")
+            .linkCursor()
         }
         .padding(.vertical, 2)
         .contextMenu {
@@ -318,6 +320,7 @@ struct ActivityRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .linkCursor()
     }
 
     private var color: Color {
@@ -382,6 +385,7 @@ struct PRRow: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(.blue)
                 .help("Open worktree in terminal: \(project.path)")
+                .linkCursor()
                 .contextMenu {
                     Button("Open in Terminal") { TerminalLauncher.open(path: project.path, settings: projects.settings) }
                     Button("Reveal in Finder") {
@@ -396,6 +400,7 @@ struct PRRow: View {
             }
             .buttonStyle(.borderless)
             .help("Open on GitHub")
+            .linkCursor()
         }
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }
@@ -444,7 +449,9 @@ struct PRDetail: View {
                 Image(systemName: "folder.fill").foregroundStyle(.blue)
                 Text(project.path).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                 Button("Terminal") { TerminalLauncher.open(path: project.path, settings: projects.settings) }
+                    .linkCursor()
                 Button("Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path) }
+                    .linkCursor()
             }
             .buttonStyle(.link)
         }
