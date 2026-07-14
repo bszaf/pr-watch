@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 
 /// Adaptive poll cadence: poll fast (`fast`) while something is likely to change soon —
 /// a CI run is in flight or a change was seen recently — otherwise fall back to the
@@ -48,6 +49,12 @@ final class PRStore {
     }
 
     func start() {
+        // Catch up immediately on wake — timers don't fire while the machine sleeps.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
         Task { await refresh() }
     }
 
@@ -145,8 +152,10 @@ final class PRStore {
             var events: [ActivityEvent] = []
             for pr in prs {
                 for kind in transitions(for: pr, previous: snapshot[pr.id]) {
+                    // Use the PR's real update time (approx) so events caught after
+                    // downtime show when they happened, not "now".
                     events.append(ActivityEvent(
-                        date: Date(), prId: pr.id, repo: pr.repo,
+                        date: eventDate(for: pr), prId: pr.id, repo: pr.repo,
                         number: pr.number, ref: pr.ref, title: pr.title, url: pr.url, kind: kind))
                     if isEnabled(kind, triggers) {
                         let n = notification(for: kind, pr: pr)
@@ -155,7 +164,8 @@ final class PRStore {
                 }
             }
             if !events.isEmpty {
-                activity.insert(contentsOf: events.reversed(), at: 0)
+                activity.append(contentsOf: events)
+                activity.sort { $0.date > $1.date }   // newest first, by real event time
                 if activity.count > maxActivity { activity = Array(activity.prefix(maxActivity)) }
                 lastChangeAt = Date()   // keep polling fast for a bit after any change
             }
@@ -171,6 +181,21 @@ final class PRStore {
 
     private func saveActivity() {
         ActivityStore.save(activity)
+    }
+
+    /// Best-effort real timestamp for an event, from the PR's ISO8601 updatedAt.
+    private func eventDate(for pr: PullRequest) -> Date {
+        pr.updatedAt.flatMap(Self.parseISO) ?? Date()
+    }
+
+    private static let iso = ISO8601DateFormatter()
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static func parseISO(_ s: String) -> Date? {
+        iso.date(from: s) ?? isoFractional.date(from: s)
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {
