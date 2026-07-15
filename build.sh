@@ -11,6 +11,9 @@ BIN=".build/${CONFIG}/PRWatch"
 echo "==> swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
 
+echo "==> stopping PR Watch"
+pkill -x PRWatch 2>/dev/null || true
+
 echo "==> assembling ${APP}"
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
