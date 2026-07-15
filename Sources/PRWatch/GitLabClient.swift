@@ -1,5 +1,22 @@
 import Foundation
 
+enum GitLabError: LocalizedError {
+    case http(Int, String)
+    case graphql(String)
+    case transport(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .http(code, body):
+            return "GitLab HTTP \(code): \(body.prefix(200))"
+        case let .graphql(message):
+            return "GitLab GraphQL error: \(message)"
+        case let .transport(message):
+            return "GitLab network error: \(message)"
+        }
+    }
+}
+
 /// Fetches the signed-in user's open Merge Requests from GitLab (gitlab.com or a
 /// self-managed host) and maps them onto the shared `PullRequest` model.
 struct GitLabClient {
@@ -20,14 +37,16 @@ struct GitLabClient {
 
     // MARK: - Token resolution
 
-    /// 1) Keychain PAT  2) `glab auth token`  3) `glab config get token`  4) GITLAB_TOKEN env.
+    /// 1) Keychain PAT  2) `glab config get token`  3) GITLAB_TOKEN env.
     func resolveToken() -> ResolvedToken? {
         if let pat = Keychain.readToken(account: Provider.gitlab.keychainAccount) {
             return ResolvedToken(token: pat, source: .keychain)
         }
-        if let t = run("/bin/zsh", ["-lc", "glab auth token -h \(hostname)"]) { return ResolvedToken(token: t, source: .cli) }
+        if let t = run("/bin/zsh", ["-lc", "glab config get token --host \(hostname)"]) {
+            return ResolvedToken(token: t, source: .cli)
+        }
         for path in ["/opt/homebrew/bin/glab", "/usr/local/bin/glab"] where FileManager.default.isExecutableFile(atPath: path) {
-            if let t = run(path, ["config", "get", "token", "-h", hostname]) { return ResolvedToken(token: t, source: .cli) }
+            if let t = run(path, ["config", "get", "token", "--host", hostname]) { return ResolvedToken(token: t, source: .cli) }
         }
         if let env = ProcessInfo.processInfo.environment["GITLAB_TOKEN"], !env.isEmpty {
             return ResolvedToken(token: env, source: .env)
@@ -56,7 +75,7 @@ struct GitLabClient {
         guard authored || reviewRequested else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         // No token isn't an error — GitLab is just "not configured" (shows "no CLI").
         guard let resolved = resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
-        guard let url = URL(string: "\(host)/api/graphql") else { throw GitHubError.transport("bad GitLab host") }
+        guard let url = URL(string: "\(host)/api/graphql") else { throw GitLabError.transport("bad GitLab host") }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -68,18 +87,18 @@ struct GitLabClient {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            throw GitHubError.transport(error.localizedDescription)
+            throw GitLabError.transport(error.localizedDescription)
         }
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-            throw GitHubError.http(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw GitLabError.http(http.statusCode, String(decoding: data, as: UTF8.self))
         }
 
         let decoded = try JSONDecoder().decode(GLResponse.self, from: data)
         if let errors = decoded.errors, !errors.isEmpty, decoded.data?.currentUser == nil {
-            throw GitHubError.graphql(errors.map(\.message).joined(separator: "; "))
+            throw GitLabError.graphql(errors.map(\.message).joined(separator: "; "))
         }
         guard let user = decoded.data?.currentUser else {
-            throw GitHubError.graphql("no currentUser (token missing read_api scope?)")
+            throw GitLabError.graphql("no currentUser (token missing read_api scope?)")
         }
 
         var seen = Set<String>()
