@@ -114,7 +114,8 @@ Native tabbed preferences:
   drawn from local projects and open PRs.
 - **Projects** — folders to scan for local git projects, and which **terminal** to open a
   project in (iTerm2 new tab / Terminal / custom `{path}` command).
-- **Notifications** — CI / review / merge-conflict trigger toggles + "Send test notification".
+- **Notifications** — CI / review / merge-conflict trigger toggles, a shortcut to choose
+  persistent **Alerts** in macOS Notification settings, and "Send test notification".
 
 Individually-watched PRs live in the main window's **Watched PRs** popover.
 
