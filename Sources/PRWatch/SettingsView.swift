@@ -276,6 +276,13 @@ private struct NotificationSettings: View {
                 Toggle("Review activity happens", isOn: $settings.notifyReview)
                 Toggle("A merge conflict appears", isOn: $settings.notifyConflicts)
             }
+            Section("Delivery style") {
+                Button("Use Alerts…") {
+                    Notifier.openNotificationSettings()
+                }
+                Text("In macOS Notifications, select PR Watch and choose Alerts. Alerts stay visible until dismissed; Banners disappear automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Test") {
                 Button("Send test notification") {
                     Notifier.notify(title: "PR Watch — test", body: "Notifications are working ✅")
