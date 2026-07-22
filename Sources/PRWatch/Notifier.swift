@@ -22,6 +22,13 @@ enum Notifier {
         }
     }
 
+    static func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     private static func osascript(title: String, body: String) {
         let script = "display notification \"\(esc(body))\" with title \"\(esc(title))\" sound name \"Glass\""
         let p = Process()
