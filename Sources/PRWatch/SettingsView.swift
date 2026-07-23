@@ -94,7 +94,9 @@ private struct SourcesSettings: View {
                     .onChange(of: settings.watchAuthored) { Task { await store.refresh() } }
                 Toggle("PRs awaiting my review", isOn: $settings.watchReviewRequested)
                     .onChange(of: settings.watchReviewRequested) { Task { await store.refresh() } }
-                Text("Individually-watched PRs live in the main window's filter.")
+                Toggle("PRs that mention me", isOn: $settings.watchMentions)
+                    .onChange(of: settings.watchMentions) { Task { await store.refresh() } }
+                Text("Shown in the window's Mine / Review / Others tabs. Individually-watched PRs live in the main window's filter.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Repositories") {

@@ -98,13 +98,19 @@ struct GitLabClient {
             throw GitLabError.graphql("no currentUser (token missing read_api scope?)")
         }
 
-        var seen = Set<String>()
-        var result: [PullRequest] = []
-        for node in (user.authored?.nodes ?? []) + (user.reviewRequested?.nodes ?? []) {
-            guard let pr = node.toPullRequest() else { continue }
-            if !repoFilters.isEmpty, !repoFilters.contains(pr.repo) { continue }
-            if seen.insert(pr.id).inserted { result.append(pr) }
+        var byId: [String: PullRequest] = [:]
+        var order: [String] = []
+        func add(_ nodes: [GLResponse.Node], _ relation: PRRelation) {
+            for node in nodes {
+                guard let pr = node.toPullRequest() else { continue }
+                if !repoFilters.isEmpty, !repoFilters.contains(pr.repo) { continue }
+                if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
+                byId[pr.id]?.relations.insert(relation)
+            }
         }
+        add(user.authored?.nodes ?? [], .authored)
+        add(user.reviewRequested?.nodes ?? [], .reviewDirect)   // GitLab has no team-review distinction
+        let result = order.compactMap { byId[$0] }
         return ProviderResult(prs: result, viewerLogin: user.username, source: resolved.source)
     }
 
