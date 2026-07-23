@@ -74,21 +74,18 @@ struct GitLabClient {
     func fetch() async throws -> ProviderResult {
         guard authored || reviewRequested else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         // No token isn't an error — GitLab is just "not configured" (shows "no CLI").
-        guard let resolved = resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
-        guard let url = URL(string: "\(host)/api/graphql") else { throw GitLabError.transport("bad GitLab host") }
+        guard var resolved = resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
+        var (data, resp) = try await request(token: resolved.token)
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(resolved.token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["query": query()])
-
-        let (data, resp): (Data, URLResponse)
-        do {
-            (data, resp) = try await URLSession.shared.data(for: req)
-        } catch {
-            throw GitLabError.transport(error.localizedDescription)
+        if let http = resp as? HTTPURLResponse,
+           http.statusCode == 401,
+           case .cli = resolved.source,
+           refreshCLIAuth(),
+           let refreshed = resolveToken() {
+            resolved = refreshed
+            (data, resp) = try await request(token: refreshed.token)
         }
+
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
             throw GitLabError.http(http.statusCode, String(decoding: data, as: UTF8.self))
         }
@@ -109,6 +106,33 @@ struct GitLabClient {
             if seen.insert(pr.id).inserted { result.append(pr) }
         }
         return ProviderResult(prs: result, viewerLogin: user.username, source: resolved.source)
+    }
+
+    private func request(token: String) async throws -> (Data, URLResponse) {
+        guard let url = URL(string: "\(host)/api/graphql") else {
+            throw GitLabError.transport("bad GitLab host")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["query": query()])
+
+        do {
+            return try await URLSession.shared.data(for: req)
+        } catch {
+            throw GitLabError.transport(error.localizedDescription)
+        }
+    }
+
+    private func refreshCLIAuth() -> Bool {
+        if run("/bin/zsh", ["-lc", "glab api user --hostname \(hostname)"]) != nil {
+            return true
+        }
+        for path in ["/opt/homebrew/bin/glab", "/usr/local/bin/glab"] where FileManager.default.isExecutableFile(atPath: path) {
+            if run(path, ["api", "user", "--hostname", hostname]) != nil { return true }
+        }
+        return false
     }
 
     // MARK: - Query
