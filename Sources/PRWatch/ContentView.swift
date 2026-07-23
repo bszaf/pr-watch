@@ -8,8 +8,9 @@ struct ContentView: View {
     @State private var showFilters = false
 
     enum Tab: String, CaseIterable, Identifiable {
-        case mine = "My PRs"
-        case others = "Other PRs"
+        case mine = "Mine"
+        case review = "Review"
+        case others = "Others"
         case activity = "Activity"
         case projects = "Projects"
         var id: String { rawValue }
@@ -25,12 +26,10 @@ struct ContentView: View {
             .navigationTitle("PR Watch")
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Picker("View", selection: $tab) {
-                        ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                    HStack(spacing: 14) {
+                        tabGroup([.mine, .review, .others])   // pull requests
+                        tabGroup([.activity, .projects])      // views
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(minWidth: 340)
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     if tab == .activity && !store.activity.isEmpty {
@@ -47,6 +46,17 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// A segmented control over a subset of tabs. The two groups share `tab`, so selecting
+    /// in one clears the other's highlight — visually grouping PR tabs apart from views.
+    private func tabGroup(_ tabs: [Tab]) -> some View {
+        Picker("View", selection: $tab) {
+            ForEach(tabs) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 
     /// Bottom status bar: poll countdown + refresh, kept out of the titlebar.
@@ -70,8 +80,15 @@ struct ContentView: View {
 
     @ViewBuilder private var tabContent: some View {
         switch tab {
-        case .mine: prList(store.pullRequests.filter { store.isMine($0) }, emptyLabel: "No PRs of yours")
-        case .others: prList(store.pullRequests.filter { !store.isMine($0) }, emptyLabel: "No PRs to review")
+        case .mine:
+            prList(store.pullRequests.filter { $0.isMine }, emptyLabel: "No PRs of yours")
+        case .review:
+            prList(store.pullRequests.filter { $0.isReview && !$0.isMine },
+                   emptyLabel: "Nothing awaiting your review")
+        case .others:
+            // Mentioned / watched — the "someone pinged me" bucket, excluding mine & review.
+            prList(store.pullRequests.filter { !$0.isMine && !$0.isReview },
+                   emptyLabel: "No mentions or watched PRs")
         case .activity: ActivityView()
         case .projects: ProjectsView()
         }
@@ -154,7 +171,7 @@ struct FilterPopover: View {
                         .disabled(GitHubClient.normalizePR(newPR) == nil)
                 }
                 if settings.customPRs.isEmpty {
-                    Text("Watched PRs appear under “Other PRs.”")
+                    Text("Watched PRs appear under “Others.”")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(settings.customPRs, id: \.self) { pr in
@@ -343,6 +360,15 @@ struct PRRow: View {
         return pr.author.isEmpty ? base : "\(base) · @\(pr.author)"
     }
 
+    /// Why this PR is here — most-specific reason wins (skip "authored", it's the Mine tab).
+    private var relationBadge: (text: String, color: Color)? {
+        if pr.relations.contains(.reviewDirect) { return ("review: you", .blue) }
+        if pr.relations.contains(.reviewTeam) { return ("review: team", .purple) }
+        if pr.relations.contains(.mentioned) { return ("mentioned", .orange) }
+        if pr.relations.contains(.watched) { return ("watching", .secondary) }
+        return nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -371,6 +397,11 @@ struct PRRow: View {
                         Text("Draft").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
                             .background(.secondary.opacity(0.2), in: Capsule())
                             .help("This PR is a draft")
+                    }
+                    if let badge = relationBadge {
+                        Text(badge.text).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(badge.color.opacity(0.18), in: Capsule())
+                            .foregroundStyle(badge.color)
                     }
                 }
                 Text(verbatim: subtitle).font(.caption).foregroundStyle(.secondary)

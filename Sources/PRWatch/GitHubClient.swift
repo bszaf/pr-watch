@@ -23,12 +23,14 @@ enum GitHubError: LocalizedError {
 struct GitHubClient {
     let authored: Bool
     let reviewRequested: Bool
+    let mentioned: Bool
     let repoFilters: [String]    // owner/repo list; empty = all repos
     let customPRs: [String]      // "owner/repo#number"
 
-    init(authored: Bool, reviewRequested: Bool, repoFilters: [String], customPRs: [String]) {
+    init(authored: Bool, reviewRequested: Bool, mentioned: Bool, repoFilters: [String], customPRs: [String]) {
         self.authored = authored
         self.reviewRequested = reviewRequested
+        self.mentioned = mentioned
         self.repoFilters = repoFilters.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         self.customPRs = customPRs
     }
@@ -119,13 +121,27 @@ struct GitHubClient {
             throw GitHubError.graphql(decoded.errors?.map(\.message).joined(separator: "; ") ?? "no data")
         }
 
-        var seen = Set<String>()
-        var result: [PullRequest] = []
-        let nodes = (block.authored?.nodes ?? []) + (block.reviewRequested?.nodes ?? []) + block.custom
-        for node in nodes {
-            guard let pr = node.toPullRequest(), seen.insert(pr.id).inserted else { continue }
-            result.append(pr)
+        // Merge buckets, unioning the relation(s) that put each PR in the set.
+        var byId: [String: PullRequest] = [:]
+        var order: [String] = []
+        func add(_ nodes: [GraphQLResponse.Node], _ relation: PRRelation) {
+            for node in nodes {
+                guard let pr = node.toPullRequest() else { continue }
+                if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
+                byId[pr.id]?.relations.insert(relation)
+            }
         }
+        let directIds = Set((block.reviewDirect?.nodes ?? []).compactMap { $0.toPullRequest()?.id })
+        add(block.authored?.nodes ?? [], .authored)
+        // review-requested is the superset; a PR not in the direct set is a team request.
+        for node in block.reviewRequested?.nodes ?? [] {
+            guard let pr = node.toPullRequest() else { continue }
+            if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
+            byId[pr.id]?.relations.insert(directIds.contains(pr.id) ? .reviewDirect : .reviewTeam)
+        }
+        add(block.mentioned?.nodes ?? [], .mentioned)
+        add(block.custom, .watched)
+        let result = order.compactMap { byId[$0] }
         return ProviderResult(prs: result, viewerLogin: block.viewer?.login, source: resolved.source)
     }
 
@@ -137,7 +153,13 @@ struct GitHubClient {
             blocks.append("authored: search(query: \"\(qString("author:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
         }
         if reviewRequested {
+            // review-requested = direct + team; user-review-requested = direct only.
+            // The set difference tells us which reviews are via a team.
             blocks.append("reviewRequested: search(query: \"\(qString("review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
+            blocks.append("reviewDirect: search(query: \"\(qString("user-review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
+        }
+        if mentioned {
+            blocks.append("mentioned: search(query: \"\(qString("mentions:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
         }
         for (i, raw) in customPRs.enumerated() {
             guard let p = Self.parsePR(raw) else { continue }
@@ -182,6 +204,8 @@ private struct GraphQLResponse: Decodable {
         var viewer: Viewer?
         var authored: SearchBlock?
         var reviewRequested: SearchBlock?
+        var reviewDirect: SearchBlock?
+        var mentioned: SearchBlock?
         var custom: [Node] = []
 
         private struct Key: CodingKey {
@@ -198,6 +222,8 @@ private struct GraphQLResponse: Decodable {
                 case "viewer": viewer = try c.decode(Viewer.self, forKey: key)
                 case "authored": authored = try c.decode(SearchBlock.self, forKey: key)
                 case "reviewRequested": reviewRequested = try c.decode(SearchBlock.self, forKey: key)
+                case "reviewDirect": reviewDirect = try c.decode(SearchBlock.self, forKey: key)
+                case "mentioned": mentioned = try c.decode(SearchBlock.self, forKey: key)
                 default:
                     // Custom `c<N>` repository blocks; a bad/404 one decodes as null and is skipped.
                     if let repo = try? c.decode(RepoBlock.self, forKey: key), let pr = repo.pullRequest {

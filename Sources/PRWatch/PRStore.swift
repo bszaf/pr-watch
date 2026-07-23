@@ -42,11 +42,8 @@ final class PRStore {
         didInitialFetch = !snapshot.isEmpty
     }
 
-    /// A PR I authored (vs. one I'm only reviewing / watching) — matched per provider.
-    func isMine(_ pr: PullRequest) -> Bool {
-        guard let me = viewerLogins[pr.provider], !me.isEmpty else { return false }
-        return pr.author == me
-    }
+    /// A PR I authored (vs. one I'm only reviewing / watching).
+    func isMine(_ pr: PullRequest) -> Bool { pr.isMine }
 
     func start() {
         // Catch up immediately on wake — timers don't fire while the machine sleeps.
@@ -122,6 +119,7 @@ final class PRStore {
             case .github:
                 result = try await GitHubClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
+                    mentioned: settings.watchMentions,
                     repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch()
             case .gitlab:
                 result = try await GitLabClient(

@@ -19,6 +19,7 @@ final class AppSettings {
     // Watch scope
     var watchAuthored: Bool { didSet { d.set(watchAuthored, forKey: "watchAuthored") } }
     var watchReviewRequested: Bool { didSet { d.set(watchReviewRequested, forKey: "watchReviewRequested") } }
+    var watchMentions: Bool { didSet { d.set(watchMentions, forKey: "watchMentions") } }
     /// Repositories (owner/name) to limit watching to. Empty = all repos.
     var repoFilters: [String] { didSet { d.set(repoFilters, forKey: "repoFilters") } }
     /// Explicitly-watched PRs, each "owner/repo#number".
@@ -43,7 +44,8 @@ final class AppSettings {
             "notifyReview": true,
             "notifyConflicts": true,
             "watchAuthored": true,
-            "watchReviewRequested": false,
+            "watchReviewRequested": true,
+            "watchMentions": true,
             "watchGitHub": true,
             "watchGitLab": true,
             "gitlabHost": "https://gitlab.com",
@@ -57,6 +59,7 @@ final class AppSettings {
         notifyConflicts = d.bool(forKey: "notifyConflicts")
         watchAuthored = d.bool(forKey: "watchAuthored")
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
+        watchMentions = d.bool(forKey: "watchMentions")
         let legacyRepoFilter = d.string(forKey: "repoFilter") ?? ""
         repoFilters = d.stringArray(forKey: "repoFilters") ?? (legacyRepoFilter.isEmpty ? [] : [legacyRepoFilter])
         customPRs = d.stringArray(forKey: "customPRs") ?? []

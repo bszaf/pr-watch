@@ -24,6 +24,15 @@ enum Mergeable: String, Codable, Sendable {
     case unknown = "UNKNOWN"
 }
 
+/// Why a PR is in the watched set (a PR can have several). Drives the window tabs.
+enum PRRelation: String, Codable, Sendable {
+    case authored        // I opened it
+    case reviewDirect    // review requested from me individually
+    case reviewTeam      // review requested from a team I'm on
+    case mentioned       // I was @-mentioned
+    case watched         // individually watched (custom PR)
+}
+
 struct PullRequest: Identifiable, Sendable, Equatable {
     let id: String            // "<provider>:owner/repo#number" — unique across providers
     let provider: Provider
@@ -46,6 +55,10 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let labels: [String]
     let comments: Int?
     let updatedAt: String?           // ISO8601
+    var relations: Set<PRRelation> = []
+
+    var isMine: Bool { relations.contains(.authored) }
+    var isReview: Bool { relations.contains(.reviewDirect) || relations.contains(.reviewTeam) }
 
     /// Display reference: "#123" on GitHub, "!123" on GitLab.
     var ref: String { provider == .gitlab ? "!\(number)" : "#\(number)" }
