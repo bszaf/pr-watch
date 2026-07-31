@@ -6,9 +6,10 @@ private func pr(
     review: ReviewDecision? = nil,
     mergeable: Mergeable = .unknown,
     approvers: [String] = [],
-    changeRequesters: [String] = []
+    changeRequesters: [String] = [],
+    relations: Set<PRRelation> = [.authored]
 ) -> PullRequest {
-    PullRequest(
+    var p = PullRequest(
         id: "github:Acme/app#1", provider: .github, number: 1, title: "Test PR",
         url: "https://example.com", isDraft: false, repo: "Acme/app",
         author: "bszaf", headBranch: nil, reviewDecision: review, mergeable: mergeable, ciState: ci,
@@ -16,13 +17,36 @@ private func pr(
         pendingReviewers: [], baseBranch: nil, additions: nil, deletions: nil,
         labels: [], comments: nil, updatedAt: nil
     )
+    p.relations = relations
+    return p
 }
 
 private let allOn = Triggers(ci: true, review: true, conflicts: true)
 
 @Suite struct NotificationRulesTests {
-    @Test func firstSightingNeverNotifies() {
+    @Test func firstSightingOfAuthoredNeverNotifies() {
         let n = notifications(for: pr(ci: .failure), previous: nil, triggers: allOn)
+        #expect(n.isEmpty)
+    }
+
+    @Test func newlyRequestedReviewNotifiesOnce() {
+        let n = notifications(
+            for: pr(relations: [.reviewDirect]), previous: nil, triggers: allOn)
+        #expect(n.count == 1)
+        #expect(n.first?.title.contains("Review requested") == true)
+    }
+
+    @Test func reviewerDoesNotGetCINotifications() {
+        let prev = SnapshotState(pr(ci: .pending, relations: [.reviewDirect]))
+        let n = notifications(
+            for: pr(ci: .success, relations: [.reviewDirect]), previous: prev, triggers: allOn)
+        #expect(n.isEmpty)
+    }
+
+    @Test func reviewerDoesNotGetApprovalNotifications() {
+        let prev = SnapshotState(pr(review: .reviewRequired, relations: [.reviewDirect]))
+        let n = notifications(
+            for: pr(review: .approved, relations: [.reviewDirect]), previous: prev, triggers: allOn)
         #expect(n.isEmpty)
     }
 
@@ -69,7 +93,7 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
         #expect(n2.isEmpty)
     }
 
-    @Test func reviewApprovalNotifies() {
+    @Test func reviewApprovalNotifiesAuthor() {
         let prev = SnapshotState(pr(review: .reviewRequired))
         let n = notifications(for: pr(review: .approved), previous: prev, triggers: allOn)
         #expect(n.first?.title.contains("Approved") == true)
@@ -107,12 +131,21 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
         #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 5) == 15)
     }
 
-    @Test func multipleTransitionsStack() {
+    @Test func multipleTransitionsStackForAuthor() {
         let prev = SnapshotState(pr(ci: .pending, review: .reviewRequired, mergeable: .mergeable))
         let n = notifications(
             for: pr(ci: .failure, review: .changesRequested, mergeable: .conflicting),
             previous: prev, triggers: allOn
         )
         #expect(n.count == 3)
+    }
+
+    @Test func authoredAndReviewerStillGetsAuthorNotifications() {
+        let prev = SnapshotState(pr(ci: .pending, relations: [.authored, .reviewDirect]))
+        let n = notifications(
+            for: pr(ci: .success, relations: [.authored, .reviewDirect]),
+            previous: prev, triggers: allOn)
+        #expect(n.count == 1)
+        #expect(n.first?.title.contains("CI passed") == true)
     }
 }

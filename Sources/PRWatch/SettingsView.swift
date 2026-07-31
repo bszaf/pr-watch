@@ -274,9 +274,11 @@ private struct NotificationSettings: View {
         @Bindable var settings = store.settings
         Form {
             Section("Notify me when") {
-                Toggle("CI checks finish", isOn: $settings.notifyCI)
-                Toggle("Review activity happens", isOn: $settings.notifyReview)
-                Toggle("A merge conflict appears", isOn: $settings.notifyConflicts)
+                Toggle("CI checks finish (my PRs)", isOn: $settings.notifyCI)
+                Toggle("Review activity", isOn: $settings.notifyReview)
+                Toggle("Merge conflict (my PRs)", isOn: $settings.notifyConflicts)
+                Text("My PRs: approval / changes requested. PRs I only review: when I'm added as a reviewer (never CI).")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Test") {
                 Button("Send test notification") {

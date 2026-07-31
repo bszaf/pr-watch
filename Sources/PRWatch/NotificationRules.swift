@@ -12,26 +12,37 @@ struct PendingNotification: Equatable, Sendable {
     let body: String
 }
 
-/// All state transitions since `previous` (nil = first sighting → none), independent of
+/// All state transitions since `previous` (nil = first sighting), independent of
 /// which triggers are enabled. Kept pure so it's directly testable. The activity feed
 /// records every transition; banners are the enabled subset.
+///
+/// Role split:
+/// - Authored PRs: CI / approval / changes-requested / conflicts.
+/// - Reviewer-only PRs: first appearance = "you were asked to review" (no CI spam).
 func transitions(for pr: PullRequest, previous: SnapshotState?) -> [ActivityKind] {
-    guard let previous else { return [] }
+    // Newly appeared after the initial fetch: only notify reviewers that they were added.
+    guard let previous else {
+        return (pr.isReview && !pr.isMine) ? [.reviewRequested] : []
+    }
+
     var out: [ActivityKind] = []
 
-    if let ci = pr.ciState, ci.isTerminal, ci != previous.ciState {
-        out.append(ci == .success ? .ciPassed : .ciFailed)
-    }
-    if pr.reviewDecision != previous.reviewDecision, let decision = pr.reviewDecision {
-        switch decision {
-        case .approved: out.append(.approved)
-        case .changesRequested: out.append(.changesRequested)
-        case .reviewRequired: out.append(.reviewRequested)
+    if pr.isMine {
+        if let ci = pr.ciState, ci.isTerminal, ci != previous.ciState {
+            out.append(ci == .success ? .ciPassed : .ciFailed)
+        }
+        if pr.reviewDecision != previous.reviewDecision, let decision = pr.reviewDecision {
+            switch decision {
+            case .approved: out.append(.approved)
+            case .changesRequested: out.append(.changesRequested)
+            case .reviewRequired: break  // PR-level "needs review" ≠ "I was selected"
+            }
+        }
+        if pr.mergeable == .conflicting, previous.mergeable != .conflicting {
+            out.append(.conflict)
         }
     }
-    if pr.mergeable == .conflicting, previous.mergeable != .conflicting {
-        out.append(.conflict)
-    }
+
     return out
 }
 
