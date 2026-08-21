@@ -5,6 +5,7 @@ struct Triggers: Sendable {
     var ci: Bool
     var review: Bool
     var conflicts: Bool
+    var comments: Bool
 }
 
 struct PendingNotification: Equatable, Sendable {
@@ -32,6 +33,10 @@ func transitions(for pr: PullRequest, previous: SnapshotState?) -> [ActivityKind
     if pr.mergeable == .conflicting, previous.mergeable != .conflicting {
         out.append(.conflict)
     }
+    // A new unresolved comment now awaits my reply (grew since last poll).
+    if pr.awaitingMyReply > (previous.awaitingReply ?? 0) {
+        out.append(.commentAwaitingReply)
+    }
     return out
 }
 
@@ -40,6 +45,7 @@ func isEnabled(_ kind: ActivityKind, _ triggers: Triggers) -> Bool {
     case .ciPassed, .ciFailed: triggers.ci
     case .approved, .changesRequested, .reviewRequested: triggers.review
     case .conflict: triggers.conflicts
+    case .commentAwaitingReply: triggers.comments
     }
 }
 
@@ -53,6 +59,7 @@ func notification(for kind: ActivityKind, pr: PullRequest) -> PendingNotificatio
     case .changesRequested: title = "✋ Changes requested\(by(pr.changeRequesters)) — \(tag)"
     case .reviewRequested: title = "👀 Review requested — \(tag)"
     case .conflict: title = "⚠️ Merge conflict — \(tag)"
+    case .commentAwaitingReply: title = "💬 Comment awaiting your reply — \(tag)"
     }
     let body = pr.author.isEmpty ? pr.title : "@\(pr.author) · \(pr.title)"
     return PendingNotification(title: title, body: body)

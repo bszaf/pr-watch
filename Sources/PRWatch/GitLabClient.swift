@@ -102,7 +102,7 @@ struct GitLabClient {
         var order: [String] = []
         func add(_ nodes: [GLResponse.Node], _ relation: PRRelation) {
             for node in nodes {
-                guard let pr = node.toPullRequest() else { continue }
+                guard let pr = node.toPullRequest(viewer: user.username) else { continue }
                 if !repoFilters.isEmpty, !repoFilters.contains(pr.repo) { continue }
                 if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
                 byId[pr.id]?.relations.insert(relation)
@@ -157,6 +157,7 @@ struct GitLabClient {
     reviewers { nodes { username } }
     labels { nodes { title } }
     diffStatsSummary { additions deletions }
+    discussions(first: 20) { nodes { resolvable resolved notes(last: 1) { nodes { author { username } } } } }
     project { fullPath }
     headPipeline { status }
     """
@@ -192,6 +193,7 @@ private struct GLResponse: Decodable {
         let reviewers: Users?
         let labels: Labels?
         let diffStatsSummary: DiffStats?
+        let discussions: Discussions?
         let project: Project?
         let headPipeline: Pipeline?
 
@@ -199,6 +201,17 @@ private struct GLResponse: Decodable {
         struct Users: Decodable {
             let nodes: [U]
             struct U: Decodable { let username: String? }
+        }
+        struct Discussions: Decodable {
+            let nodes: [Disc]
+            struct Disc: Decodable {
+                let resolvable: Bool?
+                let resolved: Bool?
+                let notes: Notes
+                struct Notes: Decodable { let nodes: [N]; struct N: Decodable { let author: Author? } }
+                var lastAuthor: String? { notes.nodes.last?.author?.username }
+                var isUnresolved: Bool { resolvable == true && resolved != true }
+            }
         }
         struct Labels: Decodable {
             let nodes: [L]
@@ -208,9 +221,11 @@ private struct GLResponse: Decodable {
         struct Project: Decodable { let fullPath: String }
         struct Pipeline: Decodable { let status: String? }
 
-        func toPullRequest() -> PullRequest? {
+        func toPullRequest(viewer: String?) -> PullRequest? {
             guard let iidStr = iid, let number = Int(iidStr),
                   let title, let url = webUrl, let repo = project?.fullPath else { return nil }
+            let unresolved = (discussions?.nodes ?? []).filter { $0.isUnresolved }
+            let awaiting = unresolved.filter { $0.lastAuthor != nil && $0.lastAuthor != viewer }
             return PullRequest(
                 id: "gitlab:\(repo)#\(number)",
                 provider: .gitlab,
@@ -235,7 +250,10 @@ private struct GLResponse: Decodable {
                 deletions: diffStatsSummary?.deletions,
                 labels: labels?.nodes.map(\.title) ?? [],
                 comments: userNotesCount,
-                updatedAt: updatedAt
+                updatedAt: updatedAt,
+                commentedReviewers: [],
+                unresolvedThreads: unresolved.count,
+                awaitingMyReply: awaiting.count
             )
         }
 

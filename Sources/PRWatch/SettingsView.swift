@@ -277,6 +277,7 @@ private struct NotificationSettings: View {
                 Toggle("CI checks finish", isOn: $settings.notifyCI)
                 Toggle("Review activity happens", isOn: $settings.notifyReview)
                 Toggle("A merge conflict appears", isOn: $settings.notifyConflicts)
+                Toggle("A comment awaits my reply", isOn: $settings.notifyComments)
             }
             Section("Test") {
                 Button("Send test notification") {

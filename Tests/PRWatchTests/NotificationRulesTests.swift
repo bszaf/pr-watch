@@ -6,7 +6,8 @@ private func pr(
     review: ReviewDecision? = nil,
     mergeable: Mergeable = .unknown,
     approvers: [String] = [],
-    changeRequesters: [String] = []
+    changeRequesters: [String] = [],
+    awaitingReply: Int = 0
 ) -> PullRequest {
     PullRequest(
         id: "github:Acme/app#1", provider: .github, number: 1, title: "Test PR",
@@ -14,11 +15,11 @@ private func pr(
         author: "bszaf", headBranch: nil, reviewDecision: review, mergeable: mergeable, ciState: ci,
         approvers: approvers, changeRequesters: changeRequesters,
         pendingReviewers: [], baseBranch: nil, additions: nil, deletions: nil,
-        labels: [], comments: nil, updatedAt: nil
+        labels: [], comments: nil, updatedAt: nil, awaitingMyReply: awaitingReply
     )
 }
 
-private let allOn = Triggers(ci: true, review: true, conflicts: true)
+private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: true)
 
 @Suite struct NotificationRulesTests {
     @Test func firstSightingNeverNotifies() {
@@ -54,7 +55,7 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
 
     @Test func disabledTriggerSuppresses() {
         let prev = SnapshotState(pr(ci: .pending))
-        let triggers = Triggers(ci: false, review: true, conflicts: true)
+        let triggers = Triggers(ci: false, review: true, conflicts: true, comments: true)
         let n = notifications(for: pr(ci: .failure), previous: prev, triggers: triggers)
         #expect(n.isEmpty)
     }
@@ -105,6 +106,19 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true)
         #expect(adaptiveInterval(anyPending: false, recentlyChanged: true, idle: 300) == 15)
         // Idle never faster than the fast floor.
         #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 5) == 15)
+    }
+
+    @Test func newUnansweredCommentNotifies() {
+        let prev = SnapshotState(ciState: nil, reviewDecision: nil, mergeable: .unknown, awaitingReply: 0)
+        let n = notifications(for: pr(awaitingReply: 2), previous: prev, triggers: allOn)
+        #expect(n.first?.title.contains("awaiting your reply") == true)
+    }
+
+    @Test func replyingClearsTheCommentSignal() {
+        // Went from 2 awaiting to 1 (you replied to one) → not a new-comment transition.
+        let prev = SnapshotState(ciState: nil, reviewDecision: nil, mergeable: .unknown, awaitingReply: 2)
+        let n = notifications(for: pr(awaitingReply: 1), previous: prev, triggers: allOn)
+        #expect(n.isEmpty)
     }
 
     @Test func multipleTransitionsStack() {

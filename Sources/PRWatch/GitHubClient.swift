@@ -122,20 +122,21 @@ struct GitHubClient {
         }
 
         // Merge buckets, unioning the relation(s) that put each PR in the set.
+        let viewer = block.viewer?.login
         var byId: [String: PullRequest] = [:]
         var order: [String] = []
         func add(_ nodes: [GraphQLResponse.Node], _ relation: PRRelation) {
             for node in nodes {
-                guard let pr = node.toPullRequest() else { continue }
+                guard let pr = node.toPullRequest(viewer: viewer) else { continue }
                 if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
                 byId[pr.id]?.relations.insert(relation)
             }
         }
-        let directIds = Set((block.reviewDirect?.nodes ?? []).compactMap { $0.toPullRequest()?.id })
+        let directIds = Set((block.reviewDirect?.nodes ?? []).compactMap { $0.toPullRequest(viewer: viewer)?.id })
         add(block.authored?.nodes ?? [], .authored)
         // review-requested is the superset; a PR not in the direct set is a team request.
         for node in block.reviewRequested?.nodes ?? [] {
-            guard let pr = node.toPullRequest() else { continue }
+            guard let pr = node.toPullRequest(viewer: viewer) else { continue }
             if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
             byId[pr.id]?.relations.insert(directIds.contains(pr.id) ? .reviewDirect : .reviewTeam)
         }
@@ -181,7 +182,8 @@ struct GitHubClient {
     author { login }
     repository { nameWithOwner }
     reviewDecision
-    latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
+    latestReviews(first: 20) { nodes { author { login __typename } state } }
+    reviewThreads(first: 15) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
     reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
     labels(first: 10) { nodes { name } }
     comments { totalCount }
@@ -251,18 +253,33 @@ private struct GraphQLResponse: Decodable {
         let deletions: Int?
         let updatedAt: String?
         let reviewDecision: ReviewDecision?
-        let latestOpinionatedReviews: Reviews?
+        let latestReviews: Reviews?
+        let reviewThreads: ReviewThreads?
         let reviewRequests: ReviewRequests?
         let labels: Labels?
         let comments: Count?
         let mergeable: Mergeable?
         let commits: Commits?
 
-        struct Author: Decodable { let login: String? }
+        struct Author: Decodable {
+            let login: String?
+            let typename: String?
+            enum CodingKeys: String, CodingKey { case login; case typename = "__typename" }
+            var isBot: Bool { typename == "Bot" || (login?.hasSuffix("[bot]") ?? false) }
+        }
         struct Repo: Decodable { let nameWithOwner: String }
         struct Reviews: Decodable {
             let nodes: [ReviewNode]
             struct ReviewNode: Decodable { let author: Author?; let state: String? }
+        }
+        struct ReviewThreads: Decodable {
+            let nodes: [Thread]
+            struct Thread: Decodable {
+                let isResolved: Bool
+                let comments: Comments
+                struct Comments: Decodable { let nodes: [ReviewNode]; struct ReviewNode: Decodable { let author: Author? } }
+                var lastAuthor: Author? { comments.nodes.last?.author }
+            }
         }
         struct ReviewRequests: Decodable {
             let nodes: [RRNode]
@@ -285,9 +302,21 @@ private struct GraphQLResponse: Decodable {
             }
         }
 
-        func toPullRequest() -> PullRequest? {
+        func toPullRequest(viewer: String?) -> PullRequest? {
             guard let number, let title, let url, let repo = repository?.nameWithOwner else { return nil }
-            let reviews = latestOpinionatedReviews?.nodes ?? []
+            let reviews = latestReviews?.nodes ?? []
+            let approvers = reviews.filter { $0.state == "APPROVED" }.compactMap { $0.author?.login }
+            let changeRequesters = reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login }
+            let commented = reviews
+                .filter { $0.state == "COMMENTED" && $0.author?.isBot == false }
+                .compactMap { $0.author?.login }
+                .filter { !approvers.contains($0) && !changeRequesters.contains($0) }
+
+            let unresolved = (reviewThreads?.nodes ?? []).filter { !$0.isResolved }
+            let awaiting = unresolved.filter { thread in
+                guard let a = thread.lastAuthor, a.isBot == false, let login = a.login else { return false }
+                return login != viewer
+            }
             return PullRequest(
                 id: "github:\(repo)#\(number)",
                 provider: .github,
@@ -301,15 +330,18 @@ private struct GraphQLResponse: Decodable {
                 reviewDecision: reviewDecision,
                 mergeable: mergeable ?? .unknown,
                 ciState: commits?.nodes.first?.commit.statusCheckRollup?.state,
-                approvers: reviews.filter { $0.state == "APPROVED" }.compactMap { $0.author?.login },
-                changeRequesters: reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login },
+                approvers: approvers,
+                changeRequesters: changeRequesters,
                 pendingReviewers: (reviewRequests?.nodes ?? []).compactMap { $0.requestedReviewer?.login ?? $0.requestedReviewer?.slug },
                 baseBranch: baseRefName,
                 additions: additions,
                 deletions: deletions,
                 labels: (labels?.nodes ?? []).map(\.name),
                 comments: comments?.totalCount,
-                updatedAt: updatedAt
+                updatedAt: updatedAt,
+                commentedReviewers: commented,
+                unresolvedThreads: unresolved.count,
+                awaitingMyReply: awaiting.count
             )
         }
     }

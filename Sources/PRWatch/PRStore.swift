@@ -145,7 +145,8 @@ final class PRStore {
     }
 
     private func diffAndNotify(_ prs: [PullRequest]) {
-        let triggers = Triggers(ci: settings.notifyCI, review: settings.notifyReview, conflicts: settings.notifyConflicts)
+        let triggers = Triggers(ci: settings.notifyCI, review: settings.notifyReview,
+                                conflicts: settings.notifyConflicts, comments: settings.notifyComments)
         if didInitialFetch {
             var events: [ActivityEvent] = []
             for pr in prs {
@@ -171,7 +172,8 @@ final class PRStore {
         saveActivity()
         snapshot = Dictionary(uniqueKeysWithValues: prs.map { pr in
             let mergeable = resolvedMergeable(pr.mergeable, previous: snapshot[pr.id]?.mergeable)
-            return (pr.id, SnapshotState(ciState: pr.ciState, reviewDecision: pr.reviewDecision, mergeable: mergeable))
+            return (pr.id, SnapshotState(ciState: pr.ciState, reviewDecision: pr.reviewDecision,
+                                         mergeable: mergeable, awaitingReply: pr.awaitingMyReply))
         })
         UserDefaults.standard.set(try? JSONEncoder().encode(snapshot), forKey: snapshotKey)
         didInitialFetch = true
