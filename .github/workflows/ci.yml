@@ -1,0 +1,35 @@
+name: CI
+
+# PR validation — enforces the AGENTS.md definition of done that the release
+# workflow alone can't: warning-clean build, tests, and a verifiable .app bundle.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-15   # Apple Silicon + Xcode 16 (Swift 6, needed for swift-tools 6.0)
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build (warnings are errors)
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+      - name: Test
+        run: swift test
+
+      - name: Assemble & verify app bundle
+        env:
+          NO_OPEN: "true"
+        run: |
+          ./build.sh release
+          codesign --verify --deep --strict --verbose=2 "PR Watch.app"
+          plutil -lint "PR Watch.app/Contents/Info.plist"
