@@ -10,6 +10,7 @@ final class AppSettings {
     var notifyCI: Bool { didSet { d.set(notifyCI, forKey: "notifyCI") } }
     var notifyReview: Bool { didSet { d.set(notifyReview, forKey: "notifyReview") } }
     var notifyConflicts: Bool { didSet { d.set(notifyConflicts, forKey: "notifyConflicts") } }
+    var notifyComments: Bool { didSet { d.set(notifyComments, forKey: "notifyComments") } }
 
     // Providers
     var watchGitHub: Bool { didSet { d.set(watchGitHub, forKey: "watchGitHub") } }
@@ -43,6 +44,7 @@ final class AppSettings {
             "notifyCI": true,
             "notifyReview": true,
             "notifyConflicts": true,
+            "notifyComments": true,
             "watchAuthored": true,
             "watchReviewRequested": true,
             "watchMentions": true,
@@ -57,6 +59,7 @@ final class AppSettings {
         notifyCI = d.bool(forKey: "notifyCI")
         notifyReview = d.bool(forKey: "notifyReview")
         notifyConflicts = d.bool(forKey: "notifyConflicts")
+        notifyComments = d.bool(forKey: "notifyComments")
         watchAuthored = d.bool(forKey: "watchAuthored")
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
         watchMentions = d.bool(forKey: "watchMentions")

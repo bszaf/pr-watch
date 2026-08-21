@@ -6,6 +6,7 @@ enum ActivityKind: String, Codable, Sendable {
     case ciPassed, ciFailed
     case approved, changesRequested, reviewRequested
     case conflict
+    case commentAwaitingReply
 
     var label: String {
         switch self {
@@ -15,6 +16,7 @@ enum ActivityKind: String, Codable, Sendable {
         case .changesRequested: "Changes requested"
         case .reviewRequested: "Review requested"
         case .conflict: "Merge conflict"
+        case .commentAwaitingReply: "Comment awaiting reply"
         }
     }
 
@@ -26,6 +28,7 @@ enum ActivityKind: String, Codable, Sendable {
         case .changesRequested: "hand.raised.fill"
         case .reviewRequested: "eye.fill"
         case .conflict: "exclamationmark.triangle.fill"
+        case .commentAwaitingReply: "bubble.left.and.bubble.right.fill"
         }
     }
 }

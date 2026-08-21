@@ -55,6 +55,9 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let labels: [String]
     let comments: Int?
     let updatedAt: String?           // ISO8601
+    var commentedReviewers: [String] = []   // left a comment-only review (GitHub)
+    var unresolvedThreads: Int = 0          // open review conversations
+    var awaitingMyReply: Int = 0            // unresolved & last comment isn't mine (or a bot)
     var relations: Set<PRRelation> = []
 
     var isMine: Bool { relations.contains(.authored) }
@@ -77,15 +80,18 @@ struct SnapshotState: Codable, Equatable, Sendable {
     let ciState: CheckState?
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
+    var awaitingReply: Int?          // optional so older persisted snapshots still decode
 
-    init(ciState: CheckState?, reviewDecision: ReviewDecision?, mergeable: Mergeable) {
+    init(ciState: CheckState?, reviewDecision: ReviewDecision?, mergeable: Mergeable, awaitingReply: Int? = 0) {
         self.ciState = ciState
         self.reviewDecision = reviewDecision
         self.mergeable = mergeable
+        self.awaitingReply = awaitingReply
     }
 
     init(_ pr: PullRequest) {
-        self.init(ciState: pr.ciState, reviewDecision: pr.reviewDecision, mergeable: pr.mergeable)
+        self.init(ciState: pr.ciState, reviewDecision: pr.reviewDecision,
+                  mergeable: pr.mergeable, awaitingReply: pr.awaitingMyReply)
     }
 }
 

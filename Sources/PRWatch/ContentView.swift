@@ -344,7 +344,7 @@ struct ActivityRow: View {
         switch event.kind {
         case .ciPassed, .approved: .green
         case .ciFailed: .red
-        case .changesRequested, .conflict: .orange
+        case .changesRequested, .conflict, .commentAwaitingReply: .orange
         case .reviewRequested: .secondary
         }
     }
@@ -403,6 +403,17 @@ struct PRRow: View {
                             .background(badge.color.opacity(0.18), in: Capsule())
                             .foregroundStyle(badge.color)
                     }
+                    if pr.unresolvedThreads > 0 {
+                        let awaiting = pr.awaitingMyReply > 0
+                        Label("\(pr.unresolvedThreads)", systemImage: "bubble.left.and.bubble.right.fill")
+                            .labelStyle(.titleAndIcon).font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background((awaiting ? Color.orange : Color.secondary).opacity(0.18), in: Capsule())
+                            .foregroundStyle(awaiting ? Color.orange : Color.secondary)
+                            .help(awaiting
+                                  ? "\(pr.awaitingMyReply) unresolved comment(s) awaiting your reply"
+                                  : "\(pr.unresolvedThreads) unresolved conversation(s)")
+                    }
                 }
                 Text(verbatim: subtitle).font(.caption).foregroundStyle(.secondary)
             }
@@ -453,12 +464,21 @@ struct PRDetail: View {
     }
 
     @ViewBuilder private var reviews: some View {
-        if pr.approvers.isEmpty && pr.changeRequesters.isEmpty && pr.pendingReviewers.isEmpty {
+        let noReviews = pr.approvers.isEmpty && pr.changeRequesters.isEmpty
+            && pr.pendingReviewers.isEmpty && pr.commentedReviewers.isEmpty
+        if noReviews {
             line("person.2", "No reviews yet", .secondary)
         } else {
             if !pr.approvers.isEmpty { line("checkmark.seal.fill", "Approved · " + names(pr.approvers), .green) }
             if !pr.changeRequesters.isEmpty { line("hand.raised.fill", "Changes · " + names(pr.changeRequesters), .orange) }
+            if !pr.commentedReviewers.isEmpty { line("bubble.left.fill", "Commented · " + names(pr.commentedReviewers), .secondary) }
             if !pr.pendingReviewers.isEmpty { line("clock.fill", "Pending · " + names(pr.pendingReviewers), .secondary) }
+        }
+        if pr.unresolvedThreads > 0 {
+            let awaiting = pr.awaitingMyReply
+            line("bubble.left.and.bubble.right.fill",
+                 "\(pr.unresolvedThreads) unresolved" + (awaiting > 0 ? " · \(awaiting) awaiting your reply" : ""),
+                 awaiting > 0 ? .orange : .secondary)
         }
     }
 
