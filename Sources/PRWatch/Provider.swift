@@ -47,10 +47,26 @@ struct ProviderStatus: Sendable, Equatable {
     }
 }
 
+/// Per-PR review/thread data — the expensive-to-fetch part, cached between polls.
+struct ReviewInfo: Sendable, Equatable {
+    var approvers: [String] = []
+    var changeRequesters: [String] = []
+    var commentedReviewers: [String] = []
+    var unresolvedThreads: Int = 0
+    var awaitingMyReply: Int = 0
+}
+
+/// Cached `ReviewInfo` keyed by the PR's `updatedAt`, so we only re-fetch when it changes.
+struct CachedReview: Sendable {
+    var updatedAt: String?
+    var info: ReviewInfo
+}
+
 struct ProviderResult: Sendable {
     let prs: [PullRequest]
     let viewerLogin: String?
     let source: TokenSource
     var rateLimitRemaining: Int? = nil
     var rateLimitResetAt: Date? = nil
+    var threadCache: [String: CachedReview]? = nil   // GitHub: updated per-PR review cache
 }

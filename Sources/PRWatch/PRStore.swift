@@ -28,6 +28,7 @@ final class PRStore {
 
     private var timer: Timer?
     private var lastPRs: [Provider: [PullRequest]] = [:]   // keep last good results per provider
+    private var githubThreadCache: [String: CachedReview] = [:]   // per-PR review cache; only re-fetched when a PR changes
     private var snapshot: [String: SnapshotState] = [:]
     private var lastChangeAt: Date?
     private let recentChangeWindow: TimeInterval = 120
@@ -127,7 +128,7 @@ final class PRStore {
                 result = try await GitHubClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
                     mentioned: settings.watchMentions,
-                    repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch()
+                    repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch(cache: githubThreadCache)
             case .gitlab:
                 result = try await GitLabClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
@@ -136,6 +137,7 @@ final class PRStore {
             lastPRs[provider] = result.prs
             // Proactive backoff: pause before the quota hits zero.
             if provider == .github {
+                if let tc = result.threadCache { githubThreadCache = tc }
                 if let rem = result.rateLimitRemaining, rem < 100, let reset = result.rateLimitResetAt {
                     rateLimitedUntil = reset
                 } else {

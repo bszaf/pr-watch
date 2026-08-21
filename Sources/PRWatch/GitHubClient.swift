@@ -101,15 +101,104 @@ struct GitHubClient {
 
     // MARK: - Fetch
 
-    func fetch() async throws -> ProviderResult {
-        guard let q = query() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
+    /// Two-phase fetch. Phase A lists every watched PR with the *light* fields (identity,
+    /// CI, review-decision, mergeable) that can change without bumping `updatedAt`. Phase B
+    /// then fetches the expensive review threads / reviews ONLY for PRs that are new, whose
+    /// `updatedAt` moved, or that still have open threads (a resolution may not bump
+    /// `updatedAt`, so we re-check those to detect it clearing). Everything else reuses the
+    /// per-PR `cache`, keeping typical polls far under the GraphQL rate budget.
+    func fetch(cache: [String: CachedReview]) async throws -> ProviderResult {
+        guard let qA = queryPhaseA() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         guard let resolved = Self.resolveToken() else { throw GitHubError.noToken }
 
+        let (dataA, remA, resetA) = try await post(qA, token: resolved.token)
+        let decoded = try JSONDecoder().decode(GraphQLResponse.self, from: dataA)
+        // Partial errors (e.g. a mistyped custom PR that 404s) are tolerated as long as
+        // some data came back; only a fully-null data payload is fatal.
+        guard let block = decoded.data else {
+            let msg = decoded.errors?.map(\.message).joined(separator: "; ") ?? "no data"
+            if msg.lowercased().contains("rate limit") { throw GitHubError.rateLimited(resetA) }
+            throw GitHubError.graphql(msg)
+        }
+
+        // Merge buckets, unioning the relation(s) that put each PR in the set.
+        let viewer = block.viewer?.login
+        var order: [String] = []
+        var nodeById: [String: GraphQLResponse.Node] = [:]
+        var relationsById: [String: Set<PRRelation>] = [:]
+        func add(_ nodes: [GraphQLResponse.Node], _ relation: PRRelation) {
+            for node in nodes {
+                guard let id = node.ghId else { continue }
+                if nodeById[id] == nil { nodeById[id] = node; order.append(id) }
+                relationsById[id, default: []].insert(relation)
+            }
+        }
+        let directIds = Set((block.reviewDirect?.nodes ?? []).compactMap { $0.ghId })
+        add(block.authored?.nodes ?? [], .authored)
+        // review-requested is the superset; a PR not in the direct set is a team request.
+        for node in block.reviewRequested?.nodes ?? [] {
+            guard let id = node.ghId else { continue }
+            if nodeById[id] == nil { nodeById[id] = node; order.append(id) }
+            relationsById[id, default: []].insert(directIds.contains(id) ? .reviewDirect : .reviewTeam)
+        }
+        add(block.mentioned?.nodes ?? [], .mentioned)
+        add(block.custom, .watched)
+
+        // Which PRs need a fresh thread/review fetch?
+        var stale: [GraphQLResponse.Node] = []
+        var staleSet = Set<String>()
+        for id in order {
+            guard let node = nodeById[id] else { continue }
+            let cached = cache[id]
+            let changed = cached == nil || cached!.updatedAt != node.updatedAt
+            let hasOpenThreads = (cached?.info.unresolvedThreads ?? 0) > 0
+            if changed || hasOpenThreads { stale.append(node); staleSet.insert(id) }
+        }
+
+        // Phase B: targeted thread/review fetch for the stale set only.
+        var fresh: [String: ReviewInfo] = [:]
+        var remLast = remA, resetLast = resetA
+        if let qB = queryPhaseB(stale) {
+            do {
+                let (dataB, remB, resetB) = try await post(qB, token: resolved.token)
+                if remB != nil { remLast = remB }
+                if resetB != nil { resetLast = resetB }
+                let dec = try JSONDecoder().decode(PhaseBResponse.self, from: dataB)
+                for (i, node) in stale.enumerated() {
+                    guard let id = node.ghId, let n = dec.data?.byAlias["p\(i)"] else { continue }
+                    fresh[id] = n.reviewInfo(viewer: viewer)
+                }
+            } catch {
+                // Phase B failed (rate limit / network): keep phase-A data, fall back to
+                // cached thread info below rather than dropping the whole poll.
+            }
+        }
+
+        // Assemble PRs (fresh info for stale, cached info otherwise) and rebuild the cache.
+        var prs: [PullRequest] = []
+        var newCache: [String: CachedReview] = [:]
+        for id in order {
+            guard let node = nodeById[id] else { continue }
+            let info = staleSet.contains(id)
+                ? (fresh[id] ?? cache[id]?.info ?? ReviewInfo())
+                : (cache[id]?.info ?? ReviewInfo())
+            guard var pr = node.toPullRequest(info: info) else { continue }
+            pr.relations = relationsById[id] ?? []
+            prs.append(pr)
+            newCache[id] = CachedReview(updatedAt: node.updatedAt, info: info)
+        }
+        return ProviderResult(prs: prs, viewerLogin: viewer, source: resolved.source,
+                              rateLimitRemaining: remLast, rateLimitResetAt: resetLast,
+                              threadCache: newCache)
+    }
+
+    /// POST a GraphQL query, parse rate-limit headers, and translate HTTP failures.
+    private func post(_ query: String, token: String) async throws -> (Data, Int?, Date?) {
         var req = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
         req.httpMethod = "POST"
-        req.setValue("bearer \(resolved.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("PR-Watch", forHTTPHeaderField: "User-Agent")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["query": q])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["query": query])
 
         let (data, resp): (Data, URLResponse)
         do {
@@ -121,69 +210,50 @@ struct GitHubClient {
         let remaining = http?.value(forHTTPHeaderField: "x-ratelimit-remaining").flatMap(Int.init)
         let resetAt = http?.value(forHTTPHeaderField: "x-ratelimit-reset")
             .flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
-
         if let code = http?.statusCode, code != 200 {
             if (code == 403 || code == 429), (remaining ?? 1) == 0 { throw GitHubError.rateLimited(resetAt) }
             throw GitHubError.http(code, String(decoding: data, as: UTF8.self))
         }
-
-        let decoded = try JSONDecoder().decode(GraphQLResponse.self, from: data)
-        // Partial errors (e.g. a mistyped custom PR that 404s) are tolerated as long as
-        // some data came back; only a fully-null data payload is fatal.
-        guard let block = decoded.data else {
-            let msg = decoded.errors?.map(\.message).joined(separator: "; ") ?? "no data"
-            if msg.lowercased().contains("rate limit") { throw GitHubError.rateLimited(resetAt) }
-            throw GitHubError.graphql(msg)
-        }
-
-        // Merge buckets, unioning the relation(s) that put each PR in the set.
-        let viewer = block.viewer?.login
-        var byId: [String: PullRequest] = [:]
-        var order: [String] = []
-        func add(_ nodes: [GraphQLResponse.Node], _ relation: PRRelation) {
-            for node in nodes {
-                guard let pr = node.toPullRequest(viewer: viewer) else { continue }
-                if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
-                byId[pr.id]?.relations.insert(relation)
-            }
-        }
-        let directIds = Set((block.reviewDirect?.nodes ?? []).compactMap { $0.toPullRequest(viewer: viewer)?.id })
-        add(block.authored?.nodes ?? [], .authored)
-        // review-requested is the superset; a PR not in the direct set is a team request.
-        for node in block.reviewRequested?.nodes ?? [] {
-            guard let pr = node.toPullRequest(viewer: viewer) else { continue }
-            if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
-            byId[pr.id]?.relations.insert(directIds.contains(pr.id) ? .reviewDirect : .reviewTeam)
-        }
-        add(block.mentioned?.nodes ?? [], .mentioned)
-        add(block.custom, .watched)
-        let result = order.compactMap { byId[$0] }
-        return ProviderResult(prs: result, viewerLogin: block.viewer?.login, source: resolved.source,
-                              rateLimitRemaining: remaining, rateLimitResetAt: resetAt)
+        return (data, remaining, resetAt)
     }
 
     // MARK: - Query building
 
-    private func query() -> String? {
+    /// Phase A: the PR list with light fields only (no reviews / threads).
+    private func queryPhaseA() -> String? {
         var blocks: [String] = []
         if authored {
-            blocks.append("authored: search(query: \"\(qString("author:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
+            blocks.append("authored: search(query: \"\(qString("author:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.lightFields) } } }")
         }
         if reviewRequested {
             // review-requested = direct + team; user-review-requested = direct only.
             // The set difference tells us which reviews are via a team.
-            blocks.append("reviewRequested: search(query: \"\(qString("review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
-            blocks.append("reviewDirect: search(query: \"\(qString("user-review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
+            blocks.append("reviewRequested: search(query: \"\(qString("review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.lightFields) } } }")
+            blocks.append("reviewDirect: search(query: \"\(qString("user-review-requested:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.lightFields) } } }")
         }
         if mentioned {
-            blocks.append("mentioned: search(query: \"\(qString("mentions:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.prFields) } } }")
+            blocks.append("mentioned: search(query: \"\(qString("mentions:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.lightFields) } } }")
         }
         for (i, raw) in customPRs.enumerated() {
             guard let p = Self.parsePR(raw) else { continue }
-            blocks.append("c\(i): repository(owner: \"\(p.owner)\", name: \"\(p.repo)\") { pullRequest(number: \(p.number)) { \(Self.prFields) } }")
+            blocks.append("c\(i): repository(owner: \"\(p.owner)\", name: \"\(p.repo)\") { pullRequest(number: \(p.number)) { \(Self.lightFields) } }")
         }
         guard !blocks.isEmpty else { return nil }
         return "query { viewer { login } \(blocks.joined(separator: " ")) }"
+    }
+
+    /// Phase B: reviews + threads for just the stale PRs, one aliased block each.
+    private func queryPhaseB(_ stale: [GraphQLResponse.Node]) -> String? {
+        var blocks: [String] = []
+        for (i, node) in stale.enumerated() {
+            guard let number = node.number,
+                  let repo = node.repository?.nameWithOwner else { continue }
+            let parts = repo.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            blocks.append("p\(i): repository(owner: \"\(parts[0])\", name: \"\(parts[1])\") { pullRequest(number: \(number)) { \(Self.threadFields) } }")
+        }
+        guard !blocks.isEmpty else { return nil }
+        return "query { \(blocks.joined(separator: " ")) }"
     }
 
     private func qString(_ who: String) -> String {
@@ -193,18 +263,24 @@ struct GitHubClient {
         return terms.joined(separator: " ")
     }
 
-    private static let prFields = """
+    /// Phase A — cheap fields fetched for every PR each poll. Excludes reviews/threads,
+    /// but keeps CI and mergeable, which can change *without* bumping `updatedAt`.
+    private static let lightFields = """
     number title url isDraft headRefName baseRefName additions deletions updatedAt
     author { login }
     repository { nameWithOwner }
     reviewDecision
-    latestReviews(first: 10) { nodes { author { login __typename } state } }
-    reviewThreads(first: 8) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
     reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
     labels(first: 10) { nodes { name } }
     comments { totalCount }
     mergeable
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    """
+
+    /// Phase B — the expensive nested connections, fetched only for stale PRs.
+    private static let threadFields = """
+    latestReviews(first: 10) { nodes { author { login __typename } state } }
+    reviewThreads(first: 8) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
     """
 }
 
@@ -318,8 +394,14 @@ private struct GraphQLResponse: Decodable {
             }
         }
 
-        func toPullRequest(viewer: String?) -> PullRequest? {
-            guard let number, let title, let url, let repo = repository?.nameWithOwner else { return nil }
+        /// Stable id from the light fields alone (available in both fetch phases).
+        var ghId: String? {
+            guard let number, let repo = repository?.nameWithOwner else { return nil }
+            return "github:\(repo)#\(number)"
+        }
+
+        /// Derive review/thread state from the phase-B connections.
+        func reviewInfo(viewer: String?) -> ReviewInfo {
             let reviews = latestReviews?.nodes ?? []
             let approvers = reviews.filter { $0.state == "APPROVED" }.compactMap { $0.author?.login }
             let changeRequesters = reviews.filter { $0.state == "CHANGES_REQUESTED" }.compactMap { $0.author?.login }
@@ -333,6 +415,15 @@ private struct GraphQLResponse: Decodable {
                 guard let a = thread.lastAuthor, a.isBot == false, let login = a.login else { return false }
                 return login != viewer
             }
+            return ReviewInfo(
+                approvers: approvers, changeRequesters: changeRequesters,
+                commentedReviewers: commented,
+                unresolvedThreads: unresolved.count, awaitingMyReply: awaiting.count)
+        }
+
+        /// Build a `PullRequest` from the phase-A light fields plus cached/fresh `ReviewInfo`.
+        func toPullRequest(info: ReviewInfo) -> PullRequest? {
+            guard let number, let title, let url, let repo = repository?.nameWithOwner else { return nil }
             return PullRequest(
                 id: "github:\(repo)#\(number)",
                 provider: .github,
@@ -346,8 +437,8 @@ private struct GraphQLResponse: Decodable {
                 reviewDecision: reviewDecision,
                 mergeable: mergeable ?? .unknown,
                 ciState: commits?.nodes.first?.commit.statusCheckRollup?.state,
-                approvers: approvers,
-                changeRequesters: changeRequesters,
+                approvers: info.approvers,
+                changeRequesters: info.changeRequesters,
                 pendingReviewers: (reviewRequests?.nodes ?? []).compactMap { $0.requestedReviewer?.login ?? $0.requestedReviewer?.slug },
                 baseBranch: baseRefName,
                 additions: additions,
@@ -355,10 +446,37 @@ private struct GraphQLResponse: Decodable {
                 labels: (labels?.nodes ?? []).map(\.name),
                 comments: comments?.totalCount,
                 updatedAt: updatedAt,
-                commentedReviewers: commented,
-                unresolvedThreads: unresolved.count,
-                awaitingMyReply: awaiting.count
+                commentedReviewers: info.commentedReviewers,
+                unresolvedThreads: info.unresolvedThreads,
+                awaitingMyReply: info.awaitingMyReply
             )
+        }
+    }
+}
+
+// MARK: - Phase B decoding
+
+/// Response for the targeted thread/review query: dynamic `p<N>` repository aliases.
+private struct PhaseBResponse: Decodable {
+    let data: DataB?
+    let errors: [GraphQLResponse.GQLError]?
+
+    struct DataB: Decodable {
+        var byAlias: [String: GraphQLResponse.Node] = [:]
+        private struct Key: CodingKey {
+            var stringValue: String
+            init?(stringValue: String) { self.stringValue = stringValue }
+            var intValue: Int? { nil }
+            init?(intValue: Int) { nil }
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Key.self)
+            for key in c.allKeys {
+                if let repo = try? c.decode(GraphQLResponse.RepoBlock.self, forKey: key),
+                   let pr = repo.pullRequest {
+                    byAlias[key.stringValue] = pr
+                }
+            }
         }
     }
 }
