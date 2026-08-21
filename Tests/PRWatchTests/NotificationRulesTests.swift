@@ -101,11 +101,11 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: 
         // Idle (nothing pending, no recent change) → configured interval.
         #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 60) == 60)
         // CI in flight → fast.
-        #expect(adaptiveInterval(anyPending: true, recentlyChanged: false, idle: 60) == 15)
+        #expect(adaptiveInterval(anyPending: true, recentlyChanged: false, idle: 60) == 30)
         // Recent change → fast.
-        #expect(adaptiveInterval(anyPending: false, recentlyChanged: true, idle: 300) == 15)
+        #expect(adaptiveInterval(anyPending: false, recentlyChanged: true, idle: 300) == 30)
         // Idle never faster than the fast floor.
-        #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 5) == 15)
+        #expect(adaptiveInterval(anyPending: false, recentlyChanged: false, idle: 5) == 30)
     }
 
     @Test func newUnansweredCommentNotifies() {

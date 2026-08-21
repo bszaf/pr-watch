@@ -121,7 +121,11 @@ struct ContentView: View {
 
     private var countdown: some View {
         Group {
-            if store.isRefreshing {
+            if let until = store.rateLimitedUntil, until > .now {
+                Label("rate-limited", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .help("GitHub API rate limit reached — showing last data; resumes automatically at \(until.formatted(date: .omitted, time: .shortened)).")
+            } else if store.isRefreshing {
                 Text("refreshing…")
             } else if let next = store.nextPollDate {
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in

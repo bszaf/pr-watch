@@ -5,7 +5,7 @@ import AppKit
 /// Adaptive poll cadence: poll fast (`fast`) while something is likely to change soon —
 /// a CI run is in flight or a change was seen recently — otherwise fall back to the
 /// user's configured `idle` interval. Pure for testability.
-func adaptiveInterval(anyPending: Bool, recentlyChanged: Bool, idle: Int, fast: Int = 15) -> TimeInterval {
+func adaptiveInterval(anyPending: Bool, recentlyChanged: Bool, idle: Int, fast: Int = 30) -> TimeInterval {
     (anyPending || recentlyChanged) ? TimeInterval(fast) : TimeInterval(max(fast, idle))
 }
 
@@ -22,10 +22,12 @@ final class PRStore {
     private(set) var lastUpdated: Date?
     private(set) var nextPollDate: Date?
     private(set) var isRefreshing = false
+    private(set) var rateLimitedUntil: Date?   // GitHub rate limit; next poll waits until this
 
     let settings: AppSettings
 
     private var timer: Timer?
+    private var lastPRs: [Provider: [PullRequest]] = [:]   // keep last good results per provider
     private var snapshot: [String: SnapshotState] = [:]
     private var lastChangeAt: Date?
     private let recentChangeWindow: TimeInterval = 120
@@ -61,7 +63,11 @@ final class PRStore {
         timer?.invalidate()
         let anyPending = pullRequests.contains { $0.ciState == .pending || $0.ciState == .expected }
         let recentlyChanged = lastChangeAt.map { Date().timeIntervalSince($0) < recentChangeWindow } ?? false
-        let interval = adaptiveInterval(anyPending: anyPending, recentlyChanged: recentlyChanged, idle: settings.pollInterval)
+        var interval = adaptiveInterval(anyPending: anyPending, recentlyChanged: recentlyChanged, idle: settings.pollInterval)
+        // Back off until the GitHub rate limit resets rather than hammering the exhausted quota.
+        if let until = rateLimitedUntil, until > Date() {
+            interval = max(interval, until.timeIntervalSinceNow + 30)
+        }
         nextPollDate = Date().addingTimeInterval(interval)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
@@ -127,16 +133,29 @@ final class PRStore {
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
                     repoFilters: settings.repoFilters, host: settings.gitlabHost).fetch()
             }
+            lastPRs[provider] = result.prs
+            // Proactive backoff: pause before the quota hits zero.
+            if provider == .github {
+                if let rem = result.rateLimitRemaining, rem < 100, let reset = result.rateLimitResetAt {
+                    rateLimitedUntil = reset
+                } else {
+                    rateLimitedUntil = nil
+                }
+            }
             return Loaded(prs: result.prs, status: ProviderStatus(
                 enabled: true, source: result.source, user: result.viewerLogin, error: nil))
         } catch {
+            if case let GitHubError.rateLimited(reset) = error {
+                rateLimitedUntil = reset ?? Date().addingTimeInterval(600)
+            }
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            // Preserve last-known source/user so the status line stays informative.
+            // Preserve last-known source/user AND last results, so a transient failure
+            // (rate limit, network) doesn't blank the list.
             var status = providerStatus[provider] ?? ProviderStatus(enabled: true, source: .none, user: nil, error: nil)
             status.enabled = true
             status.user = viewerLogins[provider]
             status.error = msg
-            return Loaded(prs: [], status: status)
+            return Loaded(prs: lastPRs[provider] ?? [], status: status)
         }
     }
 

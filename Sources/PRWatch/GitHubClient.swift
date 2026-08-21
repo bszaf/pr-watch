@@ -5,6 +5,7 @@ enum GitHubError: LocalizedError {
     case http(Int, String)
     case graphql(String)
     case transport(String)
+    case rateLimited(Date?)
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,12 @@ enum GitHubError: LocalizedError {
             return "GitHub GraphQL error: \(msg)"
         case let .transport(msg):
             return "Network error: \(msg)"
+        case let .rateLimited(reset):
+            if let reset {
+                let f = DateFormatter(); f.timeStyle = .short
+                return "GitHub API rate limit reached — resumes at \(f.string(from: reset))."
+            }
+            return "GitHub API rate limit reached."
         }
     }
 }
@@ -110,15 +117,23 @@ struct GitHubClient {
         } catch {
             throw GitHubError.transport(error.localizedDescription)
         }
-        if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-            throw GitHubError.http(http.statusCode, String(decoding: data, as: UTF8.self))
+        let http = resp as? HTTPURLResponse
+        let remaining = http?.value(forHTTPHeaderField: "x-ratelimit-remaining").flatMap(Int.init)
+        let resetAt = http?.value(forHTTPHeaderField: "x-ratelimit-reset")
+            .flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
+
+        if let code = http?.statusCode, code != 200 {
+            if (code == 403 || code == 429), (remaining ?? 1) == 0 { throw GitHubError.rateLimited(resetAt) }
+            throw GitHubError.http(code, String(decoding: data, as: UTF8.self))
         }
 
         let decoded = try JSONDecoder().decode(GraphQLResponse.self, from: data)
         // Partial errors (e.g. a mistyped custom PR that 404s) are tolerated as long as
         // some data came back; only a fully-null data payload is fatal.
         guard let block = decoded.data else {
-            throw GitHubError.graphql(decoded.errors?.map(\.message).joined(separator: "; ") ?? "no data")
+            let msg = decoded.errors?.map(\.message).joined(separator: "; ") ?? "no data"
+            if msg.lowercased().contains("rate limit") { throw GitHubError.rateLimited(resetAt) }
+            throw GitHubError.graphql(msg)
         }
 
         // Merge buckets, unioning the relation(s) that put each PR in the set.
@@ -143,7 +158,8 @@ struct GitHubClient {
         add(block.mentioned?.nodes ?? [], .mentioned)
         add(block.custom, .watched)
         let result = order.compactMap { byId[$0] }
-        return ProviderResult(prs: result, viewerLogin: block.viewer?.login, source: resolved.source)
+        return ProviderResult(prs: result, viewerLogin: block.viewer?.login, source: resolved.source,
+                              rateLimitRemaining: remaining, rateLimitResetAt: resetAt)
     }
 
     // MARK: - Query building
@@ -182,9 +198,9 @@ struct GitHubClient {
     author { login }
     repository { nameWithOwner }
     reviewDecision
-    latestReviews(first: 20) { nodes { author { login __typename } state } }
-    reviewThreads(first: 15) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
-    reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
+    latestReviews(first: 10) { nodes { author { login __typename } state } }
+    reviewThreads(first: 8) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
+    reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
     labels(first: 10) { nodes { name } }
     comments { totalCount }
     mergeable

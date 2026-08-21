@@ -51,4 +51,6 @@ struct ProviderResult: Sendable {
     let prs: [PullRequest]
     let viewerLogin: String?
     let source: TokenSource
+    var rateLimitRemaining: Int? = nil
+    var rateLimitResetAt: Date? = nil
 }
