@@ -48,7 +48,12 @@ final class PRStore {
     /// A PR I authored (vs. one I'm only reviewing / watching).
     func isMine(_ pr: PullRequest) -> Bool { pr.isMine }
 
+    private var started = false
+
     func start() {
+        // Idempotent — the window's `.task` re-runs on every reopen; don't stack observers.
+        guard !started else { return }
+        started = true
         // Catch up immediately on wake — timers don't fire while the machine sleeps.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
@@ -64,11 +69,9 @@ final class PRStore {
         timer?.invalidate()
         let anyPending = pullRequests.contains { $0.ciState == .pending || $0.ciState == .expected }
         let recentlyChanged = lastChangeAt.map { Date().timeIntervalSince($0) < recentChangeWindow } ?? false
-        var interval = adaptiveInterval(anyPending: anyPending, recentlyChanged: recentlyChanged, idle: settings.pollInterval)
-        // Back off until the GitHub rate limit resets rather than hammering the exhausted quota.
-        if let until = rateLimitedUntil, until > Date() {
-            interval = max(interval, until.timeIntervalSinceNow + 30)
-        }
+        // A GitHub rate limit doesn't slow the timer — `load(.github)` skips the fetch
+        // (reusing last results) until the reset, so GitLab keeps polling normally.
+        let interval = adaptiveInterval(anyPending: anyPending, recentlyChanged: recentlyChanged, idle: settings.pollInterval)
         nextPollDate = Date().addingTimeInterval(interval)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
@@ -105,6 +108,7 @@ final class PRStore {
                 statuses[provider] = ProviderStatus(
                     enabled: false, source: providerStatus[provider]?.source ?? .none,
                     user: viewerLogins[provider], error: nil)
+                if provider == .github { rateLimitedUntil = nil }
             }
         }
 
@@ -121,6 +125,15 @@ final class PRStore {
 
     /// Fetch one provider, translating success/failure into a `Loaded` (never throws).
     private func load(_ provider: Provider) async -> Loaded {
+        // While rate-limited, skip GitHub entirely (reuse last results) — polling an
+        // exhausted quota just burns the reset window. GitLab is unaffected.
+        if provider == .github, let until = rateLimitedUntil, until > Date() {
+            var status = providerStatus[.github]
+                ?? ProviderStatus(enabled: true, source: .none, user: viewerLogins[.github], error: nil)
+            status.enabled = true
+            status.error = GitHubError.rateLimited(until).errorDescription
+            return Loaded(prs: lastPRs[.github] ?? [], status: status)
+        }
         do {
             let result: ProviderResult
             switch provider {
@@ -205,9 +218,9 @@ final class PRStore {
                 activity.sort { $0.date > $1.date }   // newest first, by real event time
                 if activity.count > maxActivity { activity = Array(activity.prefix(maxActivity)) }
                 lastChangeAt = Date()   // keep polling fast for a bit after any change
+                saveActivity()          // only rewrite the file when something was added
             }
         }
-        saveActivity()
         snapshot = Dictionary(uniqueKeysWithValues: prs.map { pr in
             let mergeable = resolvedMergeable(pr.mergeable, previous: snapshot[pr.id]?.mergeable)
             return (pr.id, SnapshotState(ciState: pr.ciState, reviewDecision: pr.reviewDecision,
@@ -223,17 +236,7 @@ final class PRStore {
 
     /// Best-effort real timestamp for an event, from the PR's ISO8601 updatedAt.
     private func eventDate(for pr: PullRequest) -> Date {
-        pr.updatedAt.flatMap(Self.parseISO) ?? Date()
-    }
-
-    private static let iso = ISO8601DateFormatter()
-    private static let isoFractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private static func parseISO(_ s: String) -> Date? {
-        iso.date(from: s) ?? isoFractional.date(from: s)
+        pr.updatedAt.flatMap(parseISODate) ?? Date()
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {

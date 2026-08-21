@@ -33,8 +33,9 @@ func transitions(for pr: PullRequest, previous: SnapshotState?) -> [ActivityKind
     if pr.mergeable == .conflicting, previous.mergeable != .conflicting {
         out.append(.conflict)
     }
-    // A new unresolved comment now awaits my reply (grew since last poll).
-    if pr.awaitingMyReply > (previous.awaitingReply ?? 0) {
+    // A new unresolved comment now awaits my reply (grew since last poll). A nil
+    // previous count (pre-upgrade snapshot) is unknown, not zero — never spam on it.
+    if let prevAwaiting = previous.awaitingReply, pr.awaitingMyReply > prevAwaiting {
         out.append(.commentAwaitingReply)
     }
     return out

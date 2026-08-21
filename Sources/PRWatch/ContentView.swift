@@ -237,7 +237,7 @@ struct ProjectsView: View {
                 ContentUnavailableView(
                     projects.isScanning ? "Scanning…" : "No projects found",
                     systemImage: "folder",
-                    description: Text("Add folders to scan in Settings → General → Project folders.")
+                    description: Text("Add folders to scan in Settings → Projects → Project folders.")
                 )
             } else {
                 List(shown) { ProjectRow(project: $0) }
@@ -445,7 +445,7 @@ struct PRRow: View {
                 Image(systemName: "arrow.up.forward.square")
             }
             .buttonStyle(.borderless)
-            .help("Open on GitHub")
+            .help("Open on \(pr.provider.label)")
             .linkCursor()
         }
         .contentShape(Rectangle())
@@ -528,7 +528,7 @@ struct PRDetail: View {
 
     private var metaFooter: String {
         var parts: [String] = []
-        if let updated = pr.updatedAt, let date = ISO8601DateFormatter().date(from: updated) {
+        if let updated = pr.updatedAt, let date = parseISODate(updated) {
             parts.append("updated \(relative(date))")
         }
         if let c = pr.comments, c > 0 { parts.append("\(c) comment\(c == 1 ? "" : "s")") }

@@ -37,8 +37,33 @@ struct GitLabClient {
 
     // MARK: - Token resolution
 
-    /// 1) Keychain PAT  2) `glab config get token`  3) GITLAB_TOKEN env.
+    /// Resolution can spawn a login shell, so cache per host; a 401 (or a token change
+    /// in Settings) invalidates and re-resolves.
+    private static let tokenLock = NSLock()
+    private static var cachedTokens: [String: ResolvedToken] = [:]
+
+    static func invalidateTokenCache() {
+        tokenLock.lock()
+        cachedTokens = [:]
+        tokenLock.unlock()
+    }
+
     func resolveToken() -> ResolvedToken? {
+        Self.tokenLock.lock()
+        if let cached = Self.cachedTokens[hostname] {
+            Self.tokenLock.unlock()
+            return cached
+        }
+        Self.tokenLock.unlock()
+        guard let resolved = resolveTokenUncached() else { return nil }
+        Self.tokenLock.lock()
+        Self.cachedTokens[hostname] = resolved
+        Self.tokenLock.unlock()
+        return resolved
+    }
+
+    /// 1) Keychain PAT  2) `glab config get token`  3) GITLAB_TOKEN env.
+    private func resolveTokenUncached() -> ResolvedToken? {
         if let pat = Keychain.readToken(account: Provider.gitlab.keychainAccount) {
             return ResolvedToken(token: pat, source: .keychain)
         }
@@ -77,13 +102,12 @@ struct GitLabClient {
         guard var resolved = resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         var (data, resp) = try await request(token: resolved.token)
 
-        if let http = resp as? HTTPURLResponse,
-           http.statusCode == 401,
-           case .cli = resolved.source,
-           refreshCLIAuth(),
-           let refreshed = resolveToken() {
-            resolved = refreshed
-            (data, resp) = try await request(token: refreshed.token)
+        if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
+            Self.invalidateTokenCache()
+            if case .cli = resolved.source, refreshCLIAuth(), let refreshed = resolveToken() {
+                resolved = refreshed
+                (data, resp) = try await request(token: refreshed.token)
+            }
         }
 
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
@@ -157,7 +181,7 @@ struct GitLabClient {
     reviewers { nodes { username } }
     labels { nodes { title } }
     diffStatsSummary { additions deletions }
-    discussions(first: 20) { nodes { resolvable resolved notes(last: 1) { nodes { author { username } } } } }
+    discussions(first: 20) { nodes { resolvable resolved opening: notes(first: 1) { nodes { author { username } } } latest: notes(last: 1) { nodes { author { username } } } } }
     project { fullPath }
     headPipeline { status }
     """
@@ -207,9 +231,11 @@ private struct GLResponse: Decodable {
             struct Disc: Decodable {
                 let resolvable: Bool?
                 let resolved: Bool?
-                let notes: Notes
+                let opening: Notes?
+                let latest: Notes?
                 struct Notes: Decodable { let nodes: [N]; struct N: Decodable { let author: Author? } }
-                var lastAuthor: String? { notes.nodes.last?.author?.username }
+                var firstAuthor: String? { opening?.nodes.first?.author?.username }
+                var lastAuthor: String? { latest?.nodes.last?.author?.username }
                 var isUnresolved: Bool { resolvable == true && resolved != true }
             }
         }
@@ -225,7 +251,10 @@ private struct GLResponse: Decodable {
             guard let iidStr = iid, let number = Int(iidStr),
                   let title, let url = webUrl, let repo = project?.fullPath else { return nil }
             let unresolved = (discussions?.nodes ?? []).filter { $0.isUnresolved }
-            let awaiting = unresolved.filter { $0.lastAuthor != nil && $0.lastAuthor != viewer }
+            let awaiting = unresolved.filter {
+                threadAwaitsReply(viewer: viewer, prAuthor: author?.username,
+                                  firstAuthor: $0.firstAuthor, lastAuthor: $0.lastAuthor, lastIsBot: false)
+            }
             return PullRequest(
                 id: "gitlab:\(repo)#\(number)",
                 provider: .gitlab,

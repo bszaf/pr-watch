@@ -52,7 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            Notifier.useUserNotifications = granted
+            // The callback arrives on a background thread; the flag is read on main.
+            Task { @MainActor in Notifier.useUserNotifications = granted }
         }
     }
 

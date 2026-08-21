@@ -95,6 +95,26 @@ struct SnapshotState: Codable, Equatable, Sendable {
     }
 }
 
+/// GitHub timestamps are plain ISO8601; GitLab's can carry fractional seconds.
+private let isoPlain = ISO8601DateFormatter()
+private let isoFractional: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
+func parseISODate(_ s: String) -> Date? {
+    isoPlain.date(from: s) ?? isoFractional.date(from: s)
+}
+
+/// An unresolved thread "awaits my reply" only if I'm part of the conversation — it's on
+/// my PR or I opened the thread — and the last word isn't mine (or a bot's).
+func threadAwaitsReply(viewer: String?, prAuthor: String?, firstAuthor: String?,
+                       lastAuthor: String?, lastIsBot: Bool) -> Bool {
+    guard let viewer, let lastAuthor, !lastIsBot, lastAuthor != viewer else { return false }
+    return prAuthor == viewer || firstAuthor == viewer
+}
+
 /// GitHub computes `mergeable` asynchronously, so it flaps to `UNKNOWN` between polls.
 /// Treat `UNKNOWN` as "no new info" and carry the last known state forward, so a
 /// CONFLICTING→UNKNOWN→CONFLICTING flap doesn't re-fire a conflict notification.

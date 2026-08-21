@@ -1,7 +1,6 @@
 import Foundation
 
 enum GitHubError: LocalizedError {
-    case noToken
     case http(Int, String)
     case graphql(String)
     case transport(String)
@@ -9,8 +8,6 @@ enum GitHubError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noToken:
-            return "No GitHub token. Run `gh auth login` or paste a PAT in Settings."
         case let .http(code, body):
             return "GitHub HTTP \(code): \(body.prefix(200))"
         case let .graphql(msg):
@@ -68,9 +65,28 @@ struct GitHubClient {
 
     // MARK: - Token resolution
 
+    /// Resolution spawns a login shell, so cache the result across polls; a 401 (or a
+    /// token change in Settings) invalidates and re-resolves.
+    private static let tokenLock = NSLock()
+    private static var cachedToken: ResolvedToken?
+
+    static func resolveToken() -> ResolvedToken? {
+        tokenLock.lock()
+        defer { tokenLock.unlock() }
+        if let cachedToken { return cachedToken }
+        cachedToken = resolveTokenUncached()
+        return cachedToken
+    }
+
+    static func invalidateTokenCache() {
+        tokenLock.lock()
+        cachedToken = nil
+        tokenLock.unlock()
+    }
+
     /// 1) Keychain PAT  2) `gh auth token` via a login shell  3) probe homebrew `gh`
     /// 4) GITHUB_TOKEN env.
-    static func resolveToken() -> ResolvedToken? {
+    private static func resolveTokenUncached() -> ResolvedToken? {
         if let pat = Keychain.readToken(account: Provider.github.keychainAccount) {
             return ResolvedToken(token: pat, source: .keychain)
         }
@@ -109,9 +125,19 @@ struct GitHubClient {
     /// per-PR `cache`, keeping typical polls far under the GraphQL rate budget.
     func fetch(cache: [String: CachedReview]) async throws -> ProviderResult {
         guard let qA = queryPhaseA() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
-        guard let resolved = Self.resolveToken() else { throw GitHubError.noToken }
+        // No token isn't an error — GitHub is just "not configured" (matches GitLab).
+        guard var resolved = Self.resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
 
-        let (dataA, remA, resetA) = try await post(qA, token: resolved.token)
+        var (dataA, remA, resetA): (Data, Int?, Date?)
+        do {
+            (dataA, remA, resetA) = try await post(qA, token: resolved.token)
+        } catch GitHubError.http(401, _) {
+            // Stale cached token (e.g. expired gh OAuth token) — re-resolve once and retry.
+            Self.invalidateTokenCache()
+            guard let refreshed = Self.resolveToken() else { throw GitHubError.http(401, "token expired") }
+            resolved = refreshed
+            (dataA, remA, resetA) = try await post(qA, token: refreshed.token)
+        }
         let decoded = try JSONDecoder().decode(GraphQLResponse.self, from: dataA)
         // Partial errors (e.g. a mistyped custom PR that 404s) are tolerated as long as
         // some data came back; only a fully-null data payload is fatal.
@@ -179,17 +205,28 @@ struct GitHubClient {
         var newCache: [String: CachedReview] = [:]
         for id in order {
             guard let node = nodeById[id] else { continue }
-            let info = staleSet.contains(id)
+            let isStale = staleSet.contains(id)
+            let info = isStale
                 ? (fresh[id] ?? cache[id]?.info ?? ReviewInfo())
                 : (cache[id]?.info ?? ReviewInfo())
             guard var pr = node.toPullRequest(info: info) else { continue }
             pr.relations = relationsById[id] ?? []
             prs.append(pr)
-            newCache[id] = CachedReview(updatedAt: node.updatedAt, info: info)
+            newCache[id] = CachedReview(
+                updatedAt: Self.cacheStamp(nodeUpdatedAt: node.updatedAt, wasStale: isStale,
+                                           gotFresh: fresh[id] != nil, previous: cache[id]?.updatedAt),
+                info: info)
         }
         return ProviderResult(prs: prs, viewerLogin: viewer, source: resolved.source,
                               rateLimitRemaining: remLast, rateLimitResetAt: resetLast,
                               threadCache: newCache)
+    }
+
+    /// The `updatedAt` to store in the review cache. A stale PR whose fresh fetch failed
+    /// (phase-B error / missing alias) keeps its OLD stamp so it is retried next poll —
+    /// stamping it with the new value would freeze its cached info until the PR moves again.
+    static func cacheStamp(nodeUpdatedAt: String?, wasStale: Bool, gotFresh: Bool, previous: String?) -> String? {
+        wasStale && !gotFresh ? previous : nodeUpdatedAt
     }
 
     /// POST a GraphQL query, parse rate-limit headers, and translate HTTP failures.
@@ -220,6 +257,7 @@ struct GitHubClient {
     // MARK: - Query building
 
     /// Phase A: the PR list with light fields only (no reviews / threads).
+    /// Each search bucket caps at 40 PRs — beyond that the excess is silently unwatched.
     private func queryPhaseA() -> String? {
         var blocks: [String] = []
         if authored {
@@ -235,8 +273,9 @@ struct GitHubClient {
             blocks.append("mentioned: search(query: \"\(qString("mentions:@me"))\", type: ISSUE, first: 40) { nodes { ... on PullRequest { \(Self.lightFields) } } }")
         }
         for (i, raw) in customPRs.enumerated() {
-            guard let p = Self.parsePR(raw) else { continue }
-            blocks.append("c\(i): repository(owner: \"\(p.owner)\", name: \"\(p.repo)\") { pullRequest(number: \(p.number)) { \(Self.lightFields) } }")
+            guard let p = Self.parsePR(raw),
+                  let owner = Self.safeName(p.owner), let repo = Self.safeName(p.repo) else { continue }
+            blocks.append("c\(i): repository(owner: \"\(owner)\", name: \"\(repo)\") { pullRequest(number: \(p.number)) { \(Self.lightFields) } }")
         }
         guard !blocks.isEmpty else { return nil }
         return "query { viewer { login } \(blocks.joined(separator: " ")) }"
@@ -259,8 +298,15 @@ struct GitHubClient {
     private func qString(_ who: String) -> String {
         // Multiple `repo:` qualifiers are OR-ed by GitHub search.
         var terms = ["is:open", "is:pr", who]
-        terms += repoFilters.map { "repo:\($0)" }
+        terms += repoFilters.compactMap(Self.safeName).map { "repo:\($0)" }
         return terms.joined(separator: " ")
+    }
+
+    /// Queries are built by string interpolation, so only identifier-safe settings values
+    /// may pass through — a stray quote/backslash must not break the whole query.
+    static func safeName(_ s: String) -> String? {
+        let ok = !s.isEmpty && s.allSatisfy { $0.isLetter || $0.isNumber || "._-/".contains($0) }
+        return ok ? s : nil
     }
 
     /// Phase A — cheap fields fetched for every PR each poll. Excludes reviews/threads,
@@ -277,10 +323,14 @@ struct GitHubClient {
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     """
 
-    /// Phase B — the expensive nested connections, fetched only for stale PRs.
+    /// Phase B — the expensive nested connections, fetched only for stale PRs. The
+    /// `first:` caps silently truncate very busy PRs (>8 open threads undercount).
+    /// `opening`/`latest` alias the thread's first and last comment: who opened the
+    /// thread (participation) and who spoke last (whose turn it is).
     private static let threadFields = """
+    author { login }
     latestReviews(first: 10) { nodes { author { login __typename } state } }
-    reviewThreads(first: 8) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
+    reviewThreads(first: 8) { nodes { isResolved opening: comments(first: 1) { nodes { author { login __typename } } } latest: comments(last: 1) { nodes { author { login __typename } } } } }
     """
 }
 
@@ -368,9 +418,11 @@ private struct GraphQLResponse: Decodable {
             let nodes: [Thread]
             struct Thread: Decodable {
                 let isResolved: Bool
-                let comments: Comments
+                let opening: Comments?
+                let latest: Comments?
                 struct Comments: Decodable { let nodes: [ReviewNode]; struct ReviewNode: Decodable { let author: Author? } }
-                var lastAuthor: Author? { comments.nodes.last?.author }
+                var firstAuthor: Author? { opening?.nodes.first?.author }
+                var lastAuthor: Author? { latest?.nodes.last?.author }
             }
         }
         struct ReviewRequests: Decodable {
@@ -412,8 +464,10 @@ private struct GraphQLResponse: Decodable {
 
             let unresolved = (reviewThreads?.nodes ?? []).filter { !$0.isResolved }
             let awaiting = unresolved.filter { thread in
-                guard let a = thread.lastAuthor, a.isBot == false, let login = a.login else { return false }
-                return login != viewer
+                threadAwaitsReply(viewer: viewer, prAuthor: author?.login,
+                                  firstAuthor: thread.firstAuthor?.login,
+                                  lastAuthor: thread.lastAuthor?.login,
+                                  lastIsBot: thread.lastAuthor?.isBot ?? false)
             }
             return ReviewInfo(
                 approvers: approvers, changeRequesters: changeRequesters,

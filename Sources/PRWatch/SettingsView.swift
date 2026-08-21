@@ -36,7 +36,7 @@ private struct GeneralSettings: View {
                     Text("5 minutes").tag(300)
                 }
                 .onChange(of: settings.pollInterval) { store.restartTimer() }
-                Text("Idle cadence — the app polls every 15s while CI is running.")
+                Text("Idle cadence — the app polls every 30s while CI is running.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Startup") {
@@ -170,6 +170,7 @@ private struct SourcesSettings: View {
             Button("Save token") {
                 Keychain.setToken(input.wrappedValue.trimmingCharacters(in: .whitespaces),
                                   account: provider.keychainAccount)
+                invalidateTokenCache(provider)
                 input.wrappedValue = ""
                 flash("\(provider.label) token saved to Keychain.")
                 Task { await store.refresh() }
@@ -177,10 +178,19 @@ private struct SourcesSettings: View {
             .disabled(input.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Clear token") {
                 Keychain.deleteToken(account: provider.keychainAccount)
+                invalidateTokenCache(provider)
                 flash("\(provider.label) token cleared — falling back to \(blankHint).")
                 Task { await store.refresh() }
             }
             .disabled(Keychain.readToken(account: provider.keychainAccount) == nil)
+        }
+    }
+
+    /// Tokens are cached across polls — a saved/cleared PAT must take effect immediately.
+    private func invalidateTokenCache(_ provider: Provider) {
+        switch provider {
+        case .github: GitHubClient.invalidateTokenCache()
+        case .gitlab: GitLabClient.invalidateTokenCache()
         }
     }
 

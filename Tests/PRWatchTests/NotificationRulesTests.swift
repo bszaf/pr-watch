@@ -114,10 +114,35 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: 
         #expect(n.first?.title.contains("awaiting your reply") == true)
     }
 
+    @Test func awaitingReplyRequiresMyParticipation() {
+        // My PR, other person spoke last → my turn.
+        #expect(threadAwaitsReply(viewer: "me", prAuthor: "me", firstAuthor: "alice",
+                                  lastAuthor: "alice", lastIsBot: false))
+        // A thread I opened on someone else's PR, they replied → my turn.
+        #expect(threadAwaitsReply(viewer: "me", prAuthor: "bob", firstAuthor: "me",
+                                  lastAuthor: "bob", lastIsBot: false))
+        // Two other people's conversation on someone else's PR → not my turn.
+        #expect(!threadAwaitsReply(viewer: "me", prAuthor: "bob", firstAuthor: "alice",
+                                   lastAuthor: "alice", lastIsBot: false))
+        // Last word is mine, or a bot's → not awaiting me.
+        #expect(!threadAwaitsReply(viewer: "me", prAuthor: "me", firstAuthor: "alice",
+                                   lastAuthor: "me", lastIsBot: false))
+        #expect(!threadAwaitsReply(viewer: "me", prAuthor: "me", firstAuthor: "alice",
+                                   lastAuthor: "ci-bot", lastIsBot: true))
+    }
+
     @Test func replyingClearsTheCommentSignal() {
         // Went from 2 awaiting to 1 (you replied to one) → not a new-comment transition.
         let prev = SnapshotState(ciState: nil, reviewDecision: nil, mergeable: .unknown, awaitingReply: 2)
         let n = notifications(for: pr(awaitingReply: 1), previous: prev, triggers: allOn)
+        #expect(n.isEmpty)
+    }
+
+    @Test func nilPreviousAwaitingCountDoesNotNotify() {
+        // Pre-upgrade snapshots have no awaiting count — unknown must not be treated as 0,
+        // or every PR with existing unresolved threads fires a banner after an app update.
+        let prev = SnapshotState(ciState: nil, reviewDecision: nil, mergeable: .unknown, awaitingReply: nil)
+        let n = notifications(for: pr(awaitingReply: 3), previous: prev, triggers: allOn)
         #expect(n.isEmpty)
     }
 
