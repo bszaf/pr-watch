@@ -35,6 +35,10 @@ final class AppSettings {
 
     var launchAtLogin: Bool { didSet { d.set(launchAtLogin, forKey: "launchAtLogin") } }
 
+    /// Populate the app with synthetic sample data (DemoData) instead of fetching — a
+    /// living visual reference rendered through the real views. No network, no notifications.
+    var demoMode: Bool { didSet { d.set(demoMode, forKey: "demoMode") } }
+
     private let d = UserDefaults.standard
 
     init() {
@@ -70,5 +74,6 @@ final class AppSettings {
         terminalApp = d.string(forKey: "terminalApp") ?? "iterm"
         customTerminalCommand = d.string(forKey: "customTerminalCommand") ?? "open -a Ghostty {path}"
         launchAtLogin = d.bool(forKey: "launchAtLogin")
+        demoMode = d.bool(forKey: "demoMode")
     }
 }

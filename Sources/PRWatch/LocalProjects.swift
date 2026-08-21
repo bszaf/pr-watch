@@ -79,9 +79,20 @@ final class ProjectStore {
 
     func scan() async {
         guard !isScanning else { return }
+        if settings.demoMode { loadDemo(); return }
         isScanning = true
         let roots = settings.scanRoots
         projects = await Task.detached { ProjectScanner.scan(roots: roots) }.value
+        byRepoBranch = Dictionary(
+            projects.compactMap { p in Self.key(p.repo, p.branch).map { ($0, p) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        isScanning = false
+    }
+
+    /// Populate from `DemoData` and rebuild the PR-match index — no filesystem scan.
+    private func loadDemo() {
+        projects = DemoData.projects
         byRepoBranch = Dictionary(
             projects.compactMap { p in Self.key(p.repo, p.branch).map { ($0, p) } },
             uniquingKeysWith: { first, _ in first }

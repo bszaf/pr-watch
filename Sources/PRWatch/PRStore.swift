@@ -72,6 +72,7 @@ final class PRStore {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        if settings.demoMode { loadDemo(); return }
         isRefreshing = true
         defer {
             isRefreshing = false
@@ -136,6 +137,22 @@ final class PRStore {
             status.user = viewerLogins[provider]
             status.error = msg
             return Loaded(prs: [], status: status)
+        }
+    }
+
+    /// Populate the stores from `DemoData` — no network, no diff, no notifications.
+    /// Stops polling; turning demo mode off and refreshing restores real fetching.
+    private func loadDemo() {
+        timer?.invalidate()
+        nextPollDate = nil
+        isRefreshing = false
+        viewerLogins = DemoData.viewerLogins
+        providerStatus = DemoData.providerStatus
+        activity = DemoData.activity
+        lastError = nil
+        lastUpdated = Date()
+        pullRequests = DemoData.pullRequests.sorted {
+            $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo
         }
     }
 
