@@ -22,6 +22,7 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(PRStore.self) private var store
+    @Environment(ProjectStore.self) private var projects
     @State private var launchMsg = ""
 
     var body: some View {
@@ -51,6 +52,16 @@ private struct GeneralSettings: View {
                 if !launchMsg.isEmpty {
                     Text(launchMsg).font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            Section("Developer") {
+                Toggle("Demo mode", isOn: $settings.demoMode)
+                    .onChange(of: settings.demoMode) {
+                        // Reload both stores: demo → synthetic data; off → resume fetching.
+                        Task { await store.refresh() }
+                        Task { await projects.scan() }
+                    }
+                Text("Fills every tab with synthetic sample data rendered through the real views — a visual reference for reviewers. No network calls or notifications while on.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

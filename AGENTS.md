@@ -64,6 +64,11 @@ Follow the vendored guidance in [`docs/swift/`](./docs/swift/) (sources in
 - **Git branches:** `bszaf/<linear-ticket>-<kebab-name>` (ask for the ticket # if unknown).
 - Commit/push only when asked; if on the default branch, branch first.
 - This repo is standalone — **never** nest it inside the `app` repo/worktree.
+- **Demo mode** (Settings → General → Developer) renders synthetic fixtures through the
+  real views as a living visual reference. Whenever you change the UX or a rendered
+  scenario (a new status glyph, badge, relation, activity kind, metadata row, tab, …),
+  **update `Sources/PRWatch/DemoData.swift`** so demo mode stays a complete reference and
+  keeps reviews easy.
 
 ## Reference docs (in `docs/swift/`)
 
