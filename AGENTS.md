@@ -7,7 +7,8 @@ alwaysApply: true
 
 A native **macOS desktop app + menu-bar item** that watches the signed-in user's GitHub
 PRs and sends desktop notifications on changes (CI finished, review activity, conflicts).
-Full product/architecture brief lives in [`PLAN.md`](./PLAN.md) — read it first.
+[`README.md`](./README.md) describes current behavior — read it first. [`PLAN.md`](./PLAN.md)
+is the original build brief, kept for historical/background context.
 
 ## Build & run (READ THIS — the environment is non-standard)
 
@@ -26,18 +27,23 @@ Full product/architecture brief lives in [`PLAN.md`](./PLAN.md) — read it firs
 ## Definition of done (precommit gate — run before handoff)
 
 1. `swift build -c release` compiles **warning-clean**.
-2. `swift test` passes (targeted is fine while iterating).
+2. `./test.sh` passes (targeted is fine while iterating).
 3. `swift format` (if adopted) / no obvious lint issues.
 4. The assembled `.app` **launches**: window opens, menu-bar item appears, a manual
    refresh shows real PRs. State this was verified — don't claim done on compile alone.
+5. After changing behavior or values (poll intervals, tab names, triggers, costs), grep
+   `README.md` and the Settings UI strings for stale references and update them — docs
+   drift on this has already recurred twice.
 
 ## Swift / SwiftUI conventions
 
 Follow the vendored guidance in [`docs/swift/`](./docs/swift/) (sources in
 `docs/swift/SOURCES.md`). Highlights:
 
-- **SwiftUI-first.** Use AppKit only where SwiftUI can't (e.g. `NSStatusItem` fallback,
-  `Process`/`osascript` for notifications). `MenuBarExtra` + `WindowGroup` cover our needs.
+- **SwiftUI-first.** Use AppKit only where SwiftUI can't (e.g. `NSStatusItem` fallback).
+  Notifications are `UNUserNotifications` (primary path); `osascript` is only the
+  unauthorized fallback. `Process` is also used for CLI token resolution and git.
+  `MenuBarExtra` + `WindowGroup` cover our needs.
 - **Modern state flow:** `@Observable` (Observation framework) over `ObservableObject`
   where practical — see `docs/swift/swift-observation.mdc`. `@State` for view-local state.
 - **Concurrency:** `async/await` and actors; keep UI-touching types `@MainActor`. NOTE the
@@ -55,13 +61,17 @@ Follow the vendored guidance in [`docs/swift/`](./docs/swift/) (sources in
 - A pasted **PAT goes only in the macOS Keychain**, never written to disk in plaintext.
 - Prefer reusing the existing `gh` login for the token (`/bin/zsh -lc 'gh auth token'`).
 - **Never read or access `.env`;** ask the user if env details are needed.
-- Respect GitHub API rate limits — one GraphQL query per poll.
+- Respect GitHub API rate limits — at most two GraphQL queries per poll (a cheap phase-A
+  list query + a targeted phase-B thread fetch only when needed), with `x-ratelimit`-based
+  backoff; stay well inside the 5,000-point/hour budget.
 
 ## Style & workflow
 
 - **Terse comments.** One line, only when non-obvious; no rationale paragraphs.
 - **Trust internal contracts;** avoid defensive guards for impossible/normalized states.
-- **Git branches:** `<linear-ticket>-<kebab-name>` (ask for the ticket # if unknown).
+- **Git branches:** `feat/<kebab-name>` (matching this repo's history, e.g.
+  `feat/demo-mode`). This is a personal repo with no Linear tickets — this convention
+  overrides any global Linear-ticket-based branch naming convention.
 - Commit/push only when asked; if on the default branch, branch first.
 - This repo is standalone — **never** nest it inside the `app` repo/worktree.
 - **Demo mode** (Settings → General → Developer) renders synthetic fixtures through the

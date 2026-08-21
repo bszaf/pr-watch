@@ -1,5 +1,10 @@
 # PR Watch — build plan
 
+*This is the original planning brief from July 2026, kept for historical context. The
+shipped app has evolved since (GitLab support, two-phase fetch, five tabs, UN
+notifications) — see [`README.md`](./README.md) and [`AGENTS.md`](./AGENTS.md) for
+current behavior.*
+
 A native **macOS desktop application that also lives in the menu bar**, which watches the
 signed-in user's GitHub pull requests and sends desktop notifications when something
 changes (CI finished, review activity, merge conflicts, etc.).

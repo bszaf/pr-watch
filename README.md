@@ -33,7 +33,7 @@ first launch macOS asks to allow notifications — **click Allow** (needed for c
 banners; otherwise it falls back to a non-clickable banner).
 
 You'll get:
-- a **window** with *My PRs / Other PRs / Activity / Projects* tabs, and
+- a **window** with *Mine / Review / Others / Activity / Projects* tabs, and
 - a **menu-bar item** (a ✓ checklist icon + open-PR count) with a quick dropdown.
 
 Daily use: just double-click **`PR Watch.app`** (or `open "PR Watch.app"`). To run it at
@@ -57,8 +57,12 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
   **Keychain PAT → CLI (`gh`/`glab`) → env var**. A provider with no credentials is simply
   "not configured" (no error), and one provider failing never blanks the other's results.
 - **Fetch** —
-  - *GitHub*: one GraphQL `search` query for authored / review-requested PRs (+ any
-    individually-watched PRs), with CI check rollup, review decision, and mergeable state.
+  - *GitHub*: **two-phase**. Phase A is a cheap GraphQL `search` query every poll —
+    authored / review-requested / mentioned PRs (+ any individually-watched PRs) — with
+    just the light fields (identity, CI check rollup, review decision, mergeable). Phase B,
+    the expensive reviews/threads query, only runs for PRs that are new, whose `updatedAt`
+    moved, or that still have unresolved threads; everything else reuses the per-PR review
+    cache.
   - *GitLab*: GraphQL `currentUser.authoredMergeRequests` / `reviewRequestedMergeRequests`,
     mapping pipeline status → CI, `conflicts` → merge conflict, `approved` → review. Refs
     render as `!123` (GitLab) vs `#123` (GitHub).
@@ -67,22 +71,26 @@ The pure notification-diff logic (`notifications(for:previous:triggers:)`) is un
   enabled trigger. The first fetch after launch never notifies (no spam for pre-existing
   state). `mergeable == UNKNOWN` (which GitHub computes asynchronously and flaps into) is
   treated as "no new info", so a `CONFLICTING→UNKNOWN→CONFLICTING` flap won't re-notify.
-- **Adaptive polling** — polls every **15s while something is in flight** (a CI run is
+- **Adaptive polling** — polls every **30s while something is in flight** (a CI run is
   pending, or a change was seen in the last 2 min) and relaxes to your **configured idle
-  interval** otherwise. GitHub GraphQL costs ~1–5 of 5,000 points/hour, so even the 15s
-  tier is a small fraction of the budget. (GraphQL can't use HTTP ETag conditional
-  requests, and the ETag-capable REST feeds don't report CI, so adaptive cadence — not
-  ETag — is the effective lever here.)
+  interval** otherwise. Thanks to the phase-A/phase-B split, a steady-state poll costs
+  only ~5 of GitHub's 5,000 rate-limit points/hour, so even the fast tier is a small
+  fraction of the budget. The client reads the `x-ratelimit-*` response headers; once the
+  remaining quota is low (or exhausted), GitHub polls are skipped — showing the last-known
+  results plus a footer note — until the reset, while GitLab keeps polling normally.
 - **Notify** — `UNUserNotifications` banners (clickable — opens the PR in your browser),
   with an `osascript` fallback if UN isn't authorized. Approval/changes banners name the
-  reviewer (e.g. *"👍 Approved by @alice — app #123"*). Test button in Settings.
+  reviewer (e.g. *"👍 Approved by @alice — app #123"*). A comment-awaiting-reply banner
+  only fires for threads you're part of (your own PR, or a thread you opened) where the
+  other side has the last word. Test button in Settings.
 
 ## Window
 
 Tabs (segmented control in the titlebar):
 
-- **My PRs** — PRs/MRs you authored (matched against each provider's own viewer).
-- **Other PRs** — ones where you're a reviewer or that you explicitly watch.
+- **Mine** — PRs/MRs you authored (matched against each provider's own viewer).
+- **Review** — review requested from you, directly or via a team you're on.
+- **Others** — PRs that @-mention you, plus PRs you individually watch.
 - **Activity** — a persisted history of every change (CI, reviews, conflicts) with
   timestamps; click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
@@ -105,16 +113,17 @@ A bottom **status bar** shows the live poll countdown + refresh; the titlebar al
 
 Native tabbed preferences:
 
-- **General** — **idle** poll interval (30s / 1m / 2m / 5m; polls at 15s while CI is running —
+- **General** — **idle** poll interval (30s / 1m / 2m / 5m; polls at 30s while CI is running —
   see Adaptive polling) and opt-in "Launch at login" (installs a launchd LaunchAgent).
 - **Sources** — enable/disable **GitHub** and **GitLab**, each showing its active source
   (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), a Keychain PAT field, and (for
-  GitLab) the host URL; **watch scope** (authored and/or review-requested); and
-  **Repositories** — a list limiting which repos to watch (empty = all), with suggestions
+  GitLab) the host URL; **watch scope** (authored and/or review-requested and/or mentions);
+  and **Repositories** — a list limiting which repos to watch (empty = all), with suggestions
   drawn from local projects and open PRs.
 - **Projects** — folders to scan for local git projects, and which **terminal** to open a
   project in (iTerm2 new tab / Terminal / custom `{path}` command).
-- **Notifications** — CI / review / merge-conflict trigger toggles + "Send test notification".
+- **Notifications** — CI / review / merge-conflict / comment-awaiting-reply trigger toggles +
+  "Send test notification".
 
 Individually-watched PRs live in the main window's **Watched PRs** popover.
 
@@ -129,7 +138,8 @@ Sources/PRWatch/
   SettingsView.swift       tabbed prefs: General / Sources / Projects / Notifications
   PRStore.swift            @Observable @MainActor: concurrent multi-provider fetch + diff→notify
   Provider.swift           Provider enum, token source, per-provider status model
-  GitHubClient.swift       GitHub token resolution + GraphQL (viewer/authored/review/custom)
+  GitHubClient.swift       GitHub token resolution + two-phase GraphQL (light list + targeted
+                           review-thread fetch, with a per-PR review-thread cache)
   GitLabClient.swift       GitLab token resolution + GraphQL (currentUser MRs) → shared model
   LocalProjects.swift      local git-project scanner + store (Projects tab, PR correlation)
   TerminalLauncher.swift   open a project in iTerm2 / Terminal / a custom command
