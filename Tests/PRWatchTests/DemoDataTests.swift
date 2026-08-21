@@ -38,9 +38,13 @@ import Testing
         #expect(prs.contains { !$0.labels.isEmpty })
         #expect(prs.contains { ($0.comments ?? 0) > 0 })
 
-        // Every activity kind appears in the feed.
-        #expect(Set(DemoData.activity.map(\.kind))
-            == [.ciPassed, .ciFailed, .approved, .changesRequested, .reviewRequested, .conflict])
+        // Comment-only reviews + unresolved thread badges (awaiting my reply, and not).
+        #expect(prs.contains { !$0.commentedReviewers.isEmpty })
+        #expect(prs.contains { $0.unresolvedThreads > 0 && $0.awaitingMyReply > 0 })
+        #expect(prs.contains { $0.unresolvedThreads > 0 && $0.awaitingMyReply == 0 })
+
+        // Every activity kind appears in the feed — can't silently rot.
+        #expect(Set(DemoData.activity.map(\.kind)) == Set(ActivityKind.allCases))
 
         // At least one PR routes to each of Mine / Review / Others.
         #expect(prs.contains { $0.isMine })
@@ -51,6 +55,8 @@ import Testing
     /// Demo mode populates the stores locally (no network) and the demo worktree
     /// correlates to a demo PR so the worktree/terminal chip and reverse PR chip show.
     @MainActor @Test func demoModePopulatesStoresAndCorrelatesProject() async {
+        ActivityStore.overrideURL = ActivityStore.freshScratchURL()
+        defer { ActivityStore.overrideURL = nil }
         let settings = AppSettings()
         settings.demoMode = true
         defer { settings.demoMode = false }

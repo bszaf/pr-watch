@@ -57,12 +57,14 @@ enum DemoData {
                additions: 214, deletions: 37,
                labels: ["enhancement", "backend"], comments: 5, updated: minsAgo(6)),
 
-            // CI failure + changes requested → red.
+            // CI failure + changes requested → red; unresolved threads incl. some awaiting
+            // my reply → orange thread badge.
             pr(.github, app, 1479, "Refactor GitLab token refresh",
                head: "octocat/glab-refresh", base: "main",
                ci: .failure, decision: .changesRequested, changeRequesters: ["carol"],
                relations: [.authored],
-               additions: 88, deletions: 120, labels: ["bug"], comments: 12, updated: minsAgo(41)),
+               additions: 88, deletions: 120, labels: ["bug"], comments: 12, updated: minsAgo(41),
+               unresolvedThreads: 3, awaitingMyReply: 2),
 
             // CI still pending + review required + pending reviewers; a Draft PR.
             pr(.github, app, 1483, "WIP: notification grouping",
@@ -94,12 +96,15 @@ enum DemoData {
                additions: 301, deletions: 0, labels: ["infra"], comments: 1, updated: minsAgo(18)),
 
             // ── Review (requested from me) ─────────────────────────────────────────
-            // Review requested from me individually ("review: you"): awaiting my review.
+            // Review requested from me individually ("review: you"): awaiting my review;
+            // also carries a comment-only review + unresolved threads not awaiting my
+            // reply → gray thread badge.
             pr(.github, "acme/webapp", 88, "Introduce feature flags service",
                author: "grace", head: "grace/feature-flags", base: "main",
                ci: .success, decision: .reviewRequired, pendingReviewers: [viewer, "heidi"],
                relations: [.reviewDirect],
-               additions: 540, deletions: 22, labels: ["feature"], comments: 8, updated: minsAgo(25)),
+               additions: 540, deletions: 22, labels: ["feature"], comments: 8, updated: minsAgo(25),
+               commentedReviewers: ["heidi"], unresolvedThreads: 2),
 
             // Review requested via a team I'm on ("review: team"); CI running.
             pr(.gitlab, "acme/infra", 61, "Rotate staging credentials",
@@ -131,6 +136,7 @@ enum DemoData {
         [
             ev(minsAgo(6), .github, app, 1481, "Add adaptive polling cadence for in-flight CI", .ciPassed),
             ev(minsAgo(20), .github, "acme/webapp", 91, "Migrate analytics to new SDK", .approved),
+            ev(minsAgo(35), .github, app, 1479, "Refactor GitLab token refresh", .commentAwaitingReply),
             ev(minsAgo(41), .github, app, 1479, "Refactor GitLab token refresh", .ciFailed),
             ev(minsAgo(50), .github, app, 1479, "Refactor GitLab token refresh", .changesRequested),
             ev(hoursAgo(1), .github, "acme/webapp", 88, "Introduce feature flags service", .reviewRequested),
@@ -146,7 +152,8 @@ enum DemoData {
         ci: CheckState?, decision: ReviewDecision?,
         approvers: [String] = [], changeRequesters: [String] = [], pendingReviewers: [String] = [],
         mergeable: Mergeable = .mergeable, relations: Set<PRRelation>,
-        additions: Int, deletions: Int, labels: [String], comments: Int, updated: String
+        additions: Int, deletions: Int, labels: [String], comments: Int, updated: String,
+        commentedReviewers: [String] = [], unresolvedThreads: Int = 0, awaitingMyReply: Int = 0
     ) -> PullRequest {
         let prefix = provider == .gitlab ? "!" : "#"
         return PullRequest(
@@ -158,7 +165,9 @@ enum DemoData {
             headBranch: head, reviewDecision: decision, mergeable: mergeable, ciState: ci,
             approvers: approvers, changeRequesters: changeRequesters, pendingReviewers: pendingReviewers,
             baseBranch: base, additions: additions, deletions: deletions,
-            labels: labels, comments: comments, updatedAt: updated, relations: relations)
+            labels: labels, comments: comments, updatedAt: updated,
+            commentedReviewers: commentedReviewers, unresolvedThreads: unresolvedThreads,
+            awaitingMyReply: awaitingMyReply, relations: relations)
     }
 
     private static func ev(

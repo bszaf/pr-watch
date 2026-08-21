@@ -2,7 +2,7 @@ import Foundation
 
 /// A single PR state change worth recording. Independent of notification toggles —
 /// the activity feed logs every transition; banners are a filtered subset.
-enum ActivityKind: String, Codable, Sendable {
+enum ActivityKind: String, Codable, Sendable, CaseIterable {
     case ciPassed, ciFailed
     case approved, changesRequested, reviewRequested
     case conflict
@@ -50,8 +50,18 @@ struct ActivityEvent: Identifiable, Codable, Sendable, Equatable {
 enum ActivityStore {
     static let version = 1
 
+    /// Test hook: redirects `fileURL` away from the real activity.json.
+    static var overrideURL: URL?
+
+    /// A fresh scratch file URL for tests; avoids `import Foundation` in test files, which
+    /// clashes with `import Testing` on this CLT-only toolchain (missing cross-import overlay).
+    static func freshScratchURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("PRWatchTests-\(UUID().uuidString).json")
+    }
+
     /// ~/Library/Application Support/PRWatch/activity.json
     static var fileURL: URL {
+        if let overrideURL { return overrideURL }
         let dir = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PRWatch", isDirectory: true)
