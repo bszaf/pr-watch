@@ -61,7 +61,7 @@ Follow the vendored guidance in [`docs/swift/`](./docs/swift/) (sources in
 
 - **Terse comments.** One line, only when non-obvious; no rationale paragraphs.
 - **Trust internal contracts;** avoid defensive guards for impossible/normalized states.
-- **Git branches:** `bszaf/<linear-ticket>-<kebab-name>` (ask for the ticket # if unknown).
+- **Git branches:** `<linear-ticket>-<kebab-name>` (ask for the ticket # if unknown).
 - Commit/push only when asked; if on the default branch, branch first.
 - This repo is standalone — **never** nest it inside the `app` repo/worktree.
 
