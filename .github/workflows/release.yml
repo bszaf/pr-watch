@@ -3,6 +3,11 @@ name: Build & Release
 on:
   push:
     branches: [main]
+    # Docs-only pushes don't change the binary — skip the rebuild/republish.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
   workflow_dispatch:
 
 permissions:
@@ -15,11 +20,15 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15   # Apple Silicon + Xcode 16 (Swift 6, needed for swift-tools 6.0)
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Toolchain
         run: swift --version
+
+      - name: Build (warnings are errors)
+        run: swift build -c release -Xswiftc -warnings-as-errors
 
       - name: Test
         run: swift test
@@ -28,6 +37,11 @@ jobs:
         env:
           CI: "true"          # tells build.sh not to `open` the app
         run: ./build.sh release
+
+      - name: Verify bundle
+        run: |
+          codesign --verify --deep --strict --verbose=2 "PR Watch.app"
+          plutil -lint "PR Watch.app/Contents/Info.plist"
 
       - name: Package .app into a zip
         run: ditto -c -k --sequesterRsrc --keepParent "PR Watch.app" "PR-Watch.zip"

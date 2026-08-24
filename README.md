@@ -1,5 +1,7 @@
 # PR Watch
 
+[![Build & Release](https://github.com/bszaf/pr-watch/actions/workflows/release.yml/badge.svg)](https://github.com/bszaf/pr-watch/actions/workflows/release.yml)
+
 A native macOS desktop app **and** menu-bar item that watches your **GitHub** pull requests
 **and GitLab** merge requests — concurrently, merged into one view — posts a desktop banner
 when something changes (CI finishes, a review lands, a branch develops a merge conflict), and
@@ -49,6 +51,11 @@ login, toggle **Settings → Launch at login**. Re-running `./build.sh` rebuilds
 ```
 
 The pure notification-diff logic (`notifications(for:previous:triggers:)`) is unit-tested.
+
+Every PR runs the **CI** workflow (warning-clean release build, tests, bundle assembly +
+codesign/plist verification); pushes to `main` additionally rebuild and republish the
+rolling [`latest` release](https://github.com/bszaf/pr-watch/releases/tag/latest)
+(docs-only pushes skip it).
 
 ## How it works
 
