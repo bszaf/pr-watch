@@ -109,6 +109,10 @@ private struct SourcesSettings: View {
                     .onChange(of: settings.watchMentions) { Task { await store.refresh() } }
                 Text("Shown in the window's Mine / Review / Others tabs. Individually-watched PRs live in the main window's filter.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Show commits behind base (my PRs)", isOn: $settings.showBehindCount)
+                    .onChange(of: settings.showBehindCount) { Task { await store.refresh() } }
+                Text("Adds a badge on your PRs/MRs showing how far the branch trails its base. Costs extra API calls per poll.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Repositories") {
                 Text("Limit watching to these repos (owner/name). Empty = all repos.")

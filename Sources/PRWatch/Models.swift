@@ -50,6 +50,7 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let changeRequesters: [String]   // logins who requested changes
     let pendingReviewers: [String]   // requested but not yet reviewed
     let baseBranch: String?
+    var behindBy: Int? = nil         // commits the head branch trails its base
     let additions: Int?
     let deletions: Int?
     let labels: [String]

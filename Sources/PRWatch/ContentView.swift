@@ -402,6 +402,15 @@ struct PRRow: View {
                             .background(.secondary.opacity(0.2), in: Capsule())
                             .help("This PR is a draft")
                     }
+                    if pr.isMine, let behind = pr.behindBy {
+                        let color: Color = behind > 0 ? .orange : .green
+                        Label("\(behind) behind", systemImage: behind > 0 ? "arrow.down" : "checkmark")
+                            .labelStyle(.titleAndIcon).font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(color.opacity(0.18), in: Capsule())
+                            .foregroundStyle(color)
+                            .help("\(behind) commit\(behind == 1 ? "" : "s") behind \(pr.baseBranch ?? "base")")
+                    }
                     if let badge = relationBadge {
                         Text(badge.text).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
                             .background(badge.color.opacity(0.18), in: Capsule())

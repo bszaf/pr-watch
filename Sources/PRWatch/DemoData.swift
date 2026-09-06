@@ -156,7 +156,7 @@ enum DemoData {
         commentedReviewers: [String] = [], unresolvedThreads: Int = 0, awaitingMyReply: Int = 0
     ) -> PullRequest {
         let prefix = provider == .gitlab ? "!" : "#"
-        return PullRequest(
+        var request = PullRequest(
             id: "\(provider.rawValue):\(repo)\(prefix)\(number)",
             provider: provider, number: number, title: title,
             url: demoURL(provider, repo, number),
@@ -168,6 +168,8 @@ enum DemoData {
             labels: labels, comments: comments, updatedAt: updated,
             commentedReviewers: commentedReviewers, unresolvedThreads: unresolvedThreads,
             awaitingMyReply: awaitingMyReply, relations: relations)
+        request.behindBy = relations.contains(.authored) ? number % 5 : nil
+        return request
     }
 
     private static func ev(

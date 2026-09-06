@@ -28,13 +28,16 @@ struct GitHubClient {
     let authored: Bool
     let reviewRequested: Bool
     let mentioned: Bool
+    let showBehindCount: Bool
     let repoFilters: [String]    // owner/repo list; empty = all repos
     let customPRs: [String]      // "owner/repo#number"
 
-    init(authored: Bool, reviewRequested: Bool, mentioned: Bool, repoFilters: [String], customPRs: [String]) {
+    init(authored: Bool, reviewRequested: Bool, mentioned: Bool, showBehindCount: Bool = true,
+         repoFilters: [String], customPRs: [String]) {
         self.authored = authored
         self.reviewRequested = reviewRequested
         self.mentioned = mentioned
+        self.showBehindCount = showBehindCount
         self.repoFilters = repoFilters.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         self.customPRs = customPRs
     }
@@ -170,6 +173,27 @@ struct GitHubClient {
         add(block.mentioned?.nodes ?? [], .mentioned)
         add(block.custom, .watched)
 
+        // Base branches can advance without changing a PR's updatedAt, so compare every
+        // authored PR on each poll. One batched query returns all exact behind counts.
+        var behindById: [String: Int] = [:]
+        var remLast = remA, resetLast = resetA
+        let authoredNodes = showBehindCount ? (block.authored?.nodes ?? []) : []
+        if let query = queryBehindCounts(authoredNodes) {
+            do {
+                let (data, remaining, reset) = try await post(query, token: resolved.token)
+                if remaining != nil { remLast = remaining }
+                if reset != nil { resetLast = reset }
+                let response = try JSONDecoder().decode(BehindResponse.self, from: data)
+                for (index, node) in authoredNodes.enumerated() {
+                    guard let id = node.ghId,
+                          let count = response.data?.byAlias["b\(index)"] else { continue }
+                    behindById[id] = count
+                }
+            } catch {
+                // Behind counts are supplementary; keep the PR list if comparison fails.
+            }
+        }
+
         // Which PRs need a fresh thread/review fetch?
         var stale: [GraphQLResponse.Node] = []
         var staleSet = Set<String>()
@@ -183,7 +207,6 @@ struct GitHubClient {
 
         // Phase B: targeted thread/review fetch for the stale set only.
         var fresh: [String: ReviewInfo] = [:]
-        var remLast = remA, resetLast = resetA
         if let qB = queryPhaseB(stale) {
             do {
                 let (dataB, remB, resetB) = try await post(qB, token: resolved.token)
@@ -211,6 +234,7 @@ struct GitHubClient {
                 : (cache[id]?.info ?? ReviewInfo())
             guard var pr = node.toPullRequest(info: info) else { continue }
             pr.relations = relationsById[id] ?? []
+            pr.behindBy = behindById[id]
             prs.append(pr)
             newCache[id] = CachedReview(
                 updatedAt: Self.cacheStamp(nodeUpdatedAt: node.updatedAt, wasStale: isStale,
@@ -295,6 +319,33 @@ struct GitHubClient {
         return "query { \(blocks.joined(separator: " ")) }"
     }
 
+    private func queryBehindCounts(_ nodes: [GraphQLResponse.Node]) -> String? {
+        var blocks: [String] = []
+        for (index, node) in nodes.enumerated() {
+            guard let number = node.number,
+                  let repo = node.repository?.nameWithOwner,
+                  let head = node.comparisonHead else { continue }
+            let parts = repo.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            blocks.append("""
+            b\(index): repository(owner: "\(parts[0])", name: "\(parts[1])") {
+              pullRequest(number: \(number)) {
+                baseRef {
+                  compare(headRef: "\(Self.escapeGraphQL(head))") { behindBy }
+                }
+              }
+            }
+            """)
+        }
+        guard !blocks.isEmpty else { return nil }
+        return "query { \(blocks.joined(separator: " ")) }"
+    }
+
+    private static func escapeGraphQL(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
     private func qString(_ who: String) -> String {
         // Multiple `repo:` qualifiers are OR-ed by GitHub search.
         var terms = ["is:open", "is:pr", who]
@@ -312,7 +363,8 @@ struct GitHubClient {
     /// Phase A — cheap fields fetched for every PR each poll. Excludes reviews/threads,
     /// but keeps CI and mergeable, which can change *without* bumping `updatedAt`.
     private static let lightFields = """
-    number title url isDraft headRefName baseRefName additions deletions updatedAt
+    number title url isDraft headRefName baseRefName additions deletions updatedAt isCrossRepository
+    headRepositoryOwner { login }
     author { login }
     repository { nameWithOwner }
     reviewDecision
@@ -391,6 +443,8 @@ private struct GraphQLResponse: Decodable {
         let repository: Repo?
         let headRefName: String?
         let baseRefName: String?
+        let isCrossRepository: Bool?
+        let headRepositoryOwner: Author?
         let additions: Int?
         let deletions: Int?
         let updatedAt: String?
@@ -452,6 +506,14 @@ private struct GraphQLResponse: Decodable {
             return "github:\(repo)#\(number)"
         }
 
+        var comparisonHead: String? {
+            guard let headRefName else { return nil }
+            if isCrossRepository == true, let owner = headRepositoryOwner?.login {
+                return "\(owner):\(headRefName)"
+            }
+            return headRefName
+        }
+
         /// Derive review/thread state from the phase-B connections.
         func reviewInfo(viewer: String?) -> ReviewInfo {
             let reviews = latestReviews?.nodes ?? []
@@ -506,6 +568,35 @@ private struct GraphQLResponse: Decodable {
             )
         }
     }
+}
+
+private struct BehindResponse: Decodable {
+    let data: DataBlock?
+
+    struct DataBlock: Decodable {
+        var byAlias: [String: Int] = [:]
+
+        private struct Key: CodingKey {
+            var stringValue: String
+            init?(stringValue: String) { self.stringValue = stringValue }
+            var intValue: Int? { nil }
+            init?(intValue: Int) { nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: Key.self)
+            for key in container.allKeys {
+                guard let repo = try? container.decode(RepoBlock.self, forKey: key),
+                      let count = repo.pullRequest?.baseRef?.compare?.behindBy else { continue }
+                byAlias[key.stringValue] = count
+            }
+        }
+    }
+
+    struct RepoBlock: Decodable { let pullRequest: PullRequestBlock? }
+    struct PullRequestBlock: Decodable { let baseRef: BaseRef? }
+    struct BaseRef: Decodable { let compare: Comparison? }
+    struct Comparison: Decodable { let behindBy: Int }
 }
 
 // MARK: - Phase B decoding

@@ -22,12 +22,15 @@ enum GitLabError: LocalizedError {
 struct GitLabClient {
     let authored: Bool
     let reviewRequested: Bool
+    let showBehindCount: Bool
     let repoFilters: [String]  // client-side filter on project fullPath; empty = all
     let host: String           // base URL, e.g. "https://gitlab.com"
 
-    init(authored: Bool, reviewRequested: Bool, repoFilters: [String], host: String) {
+    init(authored: Bool, reviewRequested: Bool, showBehindCount: Bool = true,
+         repoFilters: [String], host: String) {
         self.authored = authored
         self.reviewRequested = reviewRequested
+        self.showBehindCount = showBehindCount
         self.repoFilters = repoFilters.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let trimmed = host.trimmingCharacters(in: .whitespaces)
         self.host = trimmed.isEmpty ? "https://gitlab.com" : trimmed
@@ -122,12 +125,16 @@ struct GitLabClient {
             throw GitLabError.graphql("no currentUser (token missing read_api scope?)")
         }
 
+        let behindById = showBehindCount
+            ? await fetchBehindCounts(nodes: user.authored?.nodes ?? [], token: resolved.token)
+            : [:]
         var byId: [String: PullRequest] = [:]
         var order: [String] = []
         func add(_ nodes: [GLResponse.Node], _ relation: PRRelation) {
             for node in nodes {
-                guard let pr = node.toPullRequest(viewer: user.username) else { continue }
+                guard var pr = node.toPullRequest(viewer: user.username) else { continue }
                 if !repoFilters.isEmpty, !repoFilters.contains(pr.repo) { continue }
+                pr.behindBy = behindById[pr.id]
                 if byId[pr.id] == nil { byId[pr.id] = pr; order.append(pr.id) }
                 byId[pr.id]?.relations.insert(relation)
             }
@@ -136,6 +143,44 @@ struct GitLabClient {
         add(user.reviewRequested?.nodes ?? [], .reviewDirect)   // GitLab has no team-review distinction
         let result = order.compactMap { byId[$0] }
         return ProviderResult(prs: result, viewerLogin: user.username, source: resolved.source)
+    }
+
+    private func fetchBehindCounts(nodes: [GLResponse.Node], token: String) async -> [String: Int] {
+        let targets = nodes.compactMap { node -> (String, String, String)? in
+            guard let iid = node.iid, let repo = node.project?.fullPath,
+                  let number = Int(iid) else { return nil }
+            return ("gitlab:\(repo)#\(number)", repo, iid)
+        }
+        return await withTaskGroup(of: (String, Int)?.self) { group in
+            for (id, repo, iid) in targets {
+                group.addTask {
+                    guard let count = await Self.fetchBehindCount(
+                        host: host, repo: repo, iid: iid, token: token) else { return nil }
+                    return (id, count)
+                }
+            }
+            var result: [String: Int] = [:]
+            for await item in group {
+                if let (id, count) = item { result[id] = count }
+            }
+            return result
+        }
+    }
+
+    private static func fetchBehindCount(
+        host: String, repo: String, iid: String, token: String
+    ) async -> Int? {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        guard let project = repo.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string:
+                "\(host)/api/v4/projects/\(project)/merge_requests/\(iid)?include_diverged_commits_count=true")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(BehindCountResponse.self, from: data).count
     }
 
     private func request(token: String) async throws -> (Data, URLResponse) {
@@ -188,6 +233,14 @@ struct GitLabClient {
 }
 
 // MARK: - Decoding + mapping
+
+private struct BehindCountResponse: Decodable {
+    let count: Int
+
+    enum CodingKeys: String, CodingKey {
+        case count = "diverged_commits_count"
+    }
+}
 
 private struct GLResponse: Decodable {
     let data: DataBlock?

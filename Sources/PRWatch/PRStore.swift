@@ -140,11 +140,12 @@ final class PRStore {
             case .github:
                 result = try await GitHubClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
-                    mentioned: settings.watchMentions,
+                    mentioned: settings.watchMentions, showBehindCount: settings.showBehindCount,
                     repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch(cache: githubThreadCache)
             case .gitlab:
                 result = try await GitLabClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
+                    showBehindCount: settings.showBehindCount,
                     repoFilters: settings.repoFilters, host: settings.gitlabHost).fetch()
             }
             lastPRs[provider] = result.prs

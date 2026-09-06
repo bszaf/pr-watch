@@ -21,6 +21,8 @@ final class AppSettings {
     var watchAuthored: Bool { didSet { d.set(watchAuthored, forKey: "watchAuthored") } }
     var watchReviewRequested: Bool { didSet { d.set(watchReviewRequested, forKey: "watchReviewRequested") } }
     var watchMentions: Bool { didSet { d.set(watchMentions, forKey: "watchMentions") } }
+    /// Show how many commits each authored PR/MR is behind its base branch (extra API calls).
+    var showBehindCount: Bool { didSet { d.set(showBehindCount, forKey: "showBehindCount") } }
     /// Repositories (owner/name) to limit watching to. Empty = all repos.
     var repoFilters: [String] { didSet { d.set(repoFilters, forKey: "repoFilters") } }
     /// Explicitly-watched PRs, each "owner/repo#number".
@@ -52,6 +54,7 @@ final class AppSettings {
             "watchAuthored": true,
             "watchReviewRequested": true,
             "watchMentions": true,
+            "showBehindCount": true,
             "watchGitHub": true,
             "watchGitLab": true,
             "gitlabHost": "https://gitlab.com",
@@ -67,6 +70,7 @@ final class AppSettings {
         watchAuthored = d.bool(forKey: "watchAuthored")
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
         watchMentions = d.bool(forKey: "watchMentions")
+        showBehindCount = d.bool(forKey: "showBehindCount")
         let legacyRepoFilter = d.string(forKey: "repoFilter") ?? ""
         repoFilters = d.stringArray(forKey: "repoFilters") ?? (legacyRepoFilter.isEmpty ? [] : [legacyRepoFilter])
         customPRs = d.stringArray(forKey: "customPRs") ?? []

@@ -35,6 +35,7 @@ import Testing
 
         // Metadata rows in the expanded detail.
         #expect(prs.allSatisfy { $0.baseBranch != nil && $0.additions != nil && $0.deletions != nil })
+        #expect(prs.filter(\.isMine).allSatisfy { $0.behindBy != nil })
         #expect(prs.contains { !$0.labels.isEmpty })
         #expect(prs.contains { ($0.comments ?? 0) > 0 })
 
