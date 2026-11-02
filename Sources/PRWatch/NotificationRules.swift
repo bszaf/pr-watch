@@ -41,6 +41,32 @@ func transitions(for pr: PullRequest, previous: SnapshotState?) -> [ActivityKind
     return out
 }
 
+/// The snapshot to diff the next poll against. Entries of providers whose fetch failed are
+/// carried over: a failed cold-start poll returns no PRs, and dropping their entries would
+/// turn every change made while the app was off into a silent first sighting.
+func nextSnapshot(_ prs: [PullRequest], previous: [String: SnapshotState],
+                  keeping failed: Set<Provider>) -> [String: SnapshotState] {
+    var out = previous.filter { id, _ in failed.contains { id.hasPrefix("\($0.rawValue):") } }
+    for pr in prs {
+        out[pr.id] = SnapshotState(
+            ciState: pr.ciState, reviewDecision: pr.reviewDecision,
+            mergeable: resolvedMergeable(pr.mergeable, previous: previous[pr.id]?.mergeable),
+            awaitingReply: pr.awaitingMyReply)
+    }
+    return out
+}
+
+/// When an event happened. CI and mergeability change without bumping the PR's
+/// `updatedAt`, so only review/comment events can be backdated to it.
+func eventDate(for kind: ActivityKind, updatedAt: String?, now: Date) -> Date {
+    switch kind {
+    case .ciPassed, .ciFailed, .conflict:
+        return now
+    case .approved, .changesRequested, .reviewRequested, .commentAwaitingReply:
+        return updatedAt.flatMap(parseISODate) ?? now
+    }
+}
+
 func isEnabled(_ kind: ActivityKind, _ triggers: Triggers) -> Bool {
     switch kind {
     case .ciPassed, .ciFailed: triggers.ci

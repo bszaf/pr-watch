@@ -20,9 +20,13 @@ is the original build brief, kept for historical/background context.
   (`codesign --force --deep --sign - "PR Watch.app"`). See `build.sh` (per `PLAN.md`).
   Always test by launching the **assembled bundle** (`open "PR Watch.app"`), not `swift run`
   — a bare SwiftPM binary often won't activate as a GUI app (no window / no menu-bar item).
+- From the macOS 27 SDK on, SwiftUI's `@State` is a macro whose plugin ships only with
+  Xcode, so a bare `swift build` fails on CLT. `build.sh`/`test.sh` source
+  `scripts/toolchain.sh`, which pins `SDKROOT` to an older CLT SDK; run
+  `source scripts/toolchain.sh` before any manual `swift build`.
 - Tests: run **`./test.sh`** (not bare `swift test`). Swift Testing ships in the CLT
-  toolchain but `Testing.framework` isn't on the SDK search path, so `test.sh` adds it for
-  compile/link/rpath. Targeted: `./test.sh --filter <Suite>/<test>`.
+  toolchain but neither `Testing.framework` nor its macro plugin is on the default search
+  paths, so `test.sh` adds them for compile/link/rpath. Targeted: `./test.sh --filter <Suite>/<test>`.
 
 ## Definition of done (precommit gate — run before handoff)
 

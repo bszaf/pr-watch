@@ -67,11 +67,11 @@ struct GitLabClient {
         if let pat = Keychain.readToken(account: Provider.gitlab.keychainAccount) {
             return ResolvedToken(token: pat, source: .keychain)
         }
-        if let t = run("/bin/zsh", ["-lc", "glab config get token --host \(hostname)"]) {
+        if let t = runCapturing("/bin/zsh", ["-lc", "glab config get token --host \(shellQuote(hostname))"]) {
             return ResolvedToken(token: t, source: .cli)
         }
         for path in ["/opt/homebrew/bin/glab", "/usr/local/bin/glab"] where FileManager.default.isExecutableFile(atPath: path) {
-            if let t = run(path, ["config", "get", "token", "--host", hostname]) { return ResolvedToken(token: t, source: .cli) }
+            if let t = runCapturing(path, ["config", "get", "token", "--host", hostname]) { return ResolvedToken(token: t, source: .cli) }
         }
         if let env = ProcessInfo.processInfo.environment["GITLAB_TOKEN"], !env.isEmpty {
             return ResolvedToken(token: env, source: .env)
@@ -79,32 +79,18 @@ struct GitLabClient {
         return nil
     }
 
-    private func run(_ launch: String, _ args: [String]) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: launch)
-        p.arguments = args
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
-        let s = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
-    }
-
     // MARK: - Fetch
 
     func fetch() async throws -> ProviderResult {
         guard authored || reviewRequested else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         // No token isn't an error — GitLab is just "not configured" (shows "no CLI").
-        guard var resolved = resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
+        guard var resolved = await runBlocking({ self.resolveToken() }) else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         var (data, resp) = try await request(token: resolved.token)
 
         if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
             Self.invalidateTokenCache()
-            if case .cli = resolved.source, refreshCLIAuth(), let refreshed = resolveToken() {
+            if case .cli = resolved.source, await runBlocking({ self.refreshCLIAuth() }),
+               let refreshed = await runBlocking({ self.resolveToken() }) {
                 resolved = refreshed
                 (data, resp) = try await request(token: refreshed.token)
             }
@@ -156,11 +142,11 @@ struct GitLabClient {
     }
 
     private func refreshCLIAuth() -> Bool {
-        if run("/bin/zsh", ["-lc", "glab api user --hostname \(hostname)"]) != nil {
+        if runCapturing("/bin/zsh", ["-lc", "glab api user --hostname \(shellQuote(hostname))"]) != nil {
             return true
         }
         for path in ["/opt/homebrew/bin/glab", "/usr/local/bin/glab"] where FileManager.default.isExecutableFile(atPath: path) {
-            if run(path, ["api", "user", "--hostname", hostname]) != nil { return true }
+            if runCapturing(path, ["api", "user", "--hostname", hostname]) != nil { return true }
         }
         return false
     }

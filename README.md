@@ -47,7 +47,7 @@ login, toggle **Settings → Launch at login**. Re-running `./build.sh` rebuilds
 ## Test
 
 ```sh
-./test.sh           # Swift Testing suite (wraps `swift test` with the CLT Testing.framework path)
+./test.sh           # Swift Testing suite (wraps `swift test` with the CLT Testing framework + macro-plugin paths)
 ```
 
 The pure notification-diff logic (`notifications(for:previous:triggers:)`) is unit-tested.
@@ -76,7 +76,8 @@ rolling [`latest` release](https://github.com/bszaf/pr-watch/releases/tag/latest
 - **Poll & diff** — `PRStore` polls on an **adaptive timer**, snapshots each PR's
   `(ci, review, mergeable)` state, and notifies only on a *transition* that matches an
   enabled trigger. The first fetch after launch never notifies (no spam for pre-existing
-  state). `mergeable == UNKNOWN` (which GitHub computes asynchronously and flaps into) is
+  state). A provider whose fetch fails keeps its last snapshot, so changes made while the
+  app was off or offline still notify once it reconnects. `mergeable == UNKNOWN` (which GitHub computes asynchronously and flaps into) is
   treated as "no new info", so a `CONFLICTING→UNKNOWN→CONFLICTING` flap won't re-notify.
 - **Adaptive polling** — polls every **30s while something is in flight** (a CI run is
   pending, or a change was seen in the last 2 min) and relaxes to your **configured idle
@@ -99,7 +100,7 @@ Tabs (segmented control in the titlebar):
 - **Review** — review requested from you, directly or via a team you're on.
 - **Others** — PRs that @-mention you, plus PRs you individually watch.
 - **Activity** — a persisted history of every change (CI, reviews, conflicts) with
-  timestamps; click a row to open the PR. Stored as a versioned, human-readable JSON file
+  timestamps (CI/conflict events when detected, review/comment events at the PR's update time); click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
   so the format can evolve without breaking old data.
 - **Projects** — local git projects/worktrees found under your configurable scan folders
@@ -153,9 +154,11 @@ Sources/PRWatch/
   NotificationRules.swift  pure transition→activity/notification logic (unit-tested)
   Activity.swift           ActivityEvent + ActivityKind + versioned file store
   Notifier.swift           UNUserNotifications (clickable) + osascript fallback
+  Shell.swift              process helpers: shell quoting, capture, off-pool blocking runs
   Keychain.swift           per-provider PAT storage
   AppSettings.swift        @Observable settings persisted to UserDefaults
   LaunchAgent.swift        install/remove launchd LaunchAgent
 Tests/PRWatchTests/        Swift Testing suites (rules + mergeable dedupe + PR parsing)
 build.sh / test.sh
+scripts/toolchain.sh       CLT workarounds sourced by both (SDK pin, swift-testing plugin path)
 ```

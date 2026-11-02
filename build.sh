@@ -3,13 +3,15 @@
 # CLT-only machine: SwiftPM + hand-assembled bundle (no Xcode / xcodebuild).
 set -euo pipefail
 cd "$(dirname "$0")"
+source scripts/toolchain.sh
 
 CONFIG="${1:-release}"
 APP="PR Watch.app"
-BIN=".build/${CONFIG}/PRWatch"
 
 echo "==> swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
+# The output dir differs between SwiftPM build systems (.build/release vs .build/out/...).
+BIN="$(swift build -c "${CONFIG}" --show-bin-path)/PRWatch"
 
 echo "==> stopping PR Watch"
 pkill -x PRWatch 2>/dev/null || true

@@ -97,12 +97,16 @@ final class PRStore {
         var merged: [PullRequest] = []
         var statuses: [Provider: ProviderStatus] = [:]
         var errors: [String] = []
+        var failed: Set<Provider> = []
         for provider in Provider.allCases {
             if let loaded = results[provider] ?? nil {
                 statuses[provider] = loaded.status
                 merged += loaded.prs
                 if let user = loaded.status.user, !user.isEmpty { viewerLogins[provider] = user }
-                if let err = loaded.status.error { errors.append("\(provider.label): \(err)") }
+                if let err = loaded.status.error {
+                    errors.append("\(provider.label): \(err)")
+                    failed.insert(provider)
+                }
             } else {
                 // Disabled — keep last known identity for the status line.
                 statuses[provider] = ProviderStatus(
@@ -117,7 +121,7 @@ final class PRStore {
         lastUpdated = Date()
         lastError = merged.isEmpty && !errors.isEmpty ? errors.joined(separator: "\n") : nil
 
-        diffAndNotify(merged)
+        diffAndNotify(merged, failed: failed)
         pullRequests = merged.sorted {
             $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo
         }
@@ -195,17 +199,15 @@ final class PRStore {
         saveActivity()
     }
 
-    private func diffAndNotify(_ prs: [PullRequest]) {
+    private func diffAndNotify(_ prs: [PullRequest], failed: Set<Provider>) {
         let triggers = Triggers(ci: settings.notifyCI, review: settings.notifyReview,
                                 conflicts: settings.notifyConflicts, comments: settings.notifyComments)
         if didInitialFetch {
             var events: [ActivityEvent] = []
             for pr in prs {
                 for kind in transitions(for: pr, previous: snapshot[pr.id]) {
-                    // Use the PR's real update time (approx) so events caught after
-                    // downtime show when they happened, not "now".
                     events.append(ActivityEvent(
-                        date: eventDate(for: pr), prId: pr.id, repo: pr.repo,
+                        date: eventDate(for: kind, updatedAt: pr.updatedAt, now: Date()), prId: pr.id, repo: pr.repo,
                         number: pr.number, ref: pr.ref, title: pr.title, url: pr.url, kind: kind))
                     if isEnabled(kind, triggers) {
                         let n = notification(for: kind, pr: pr)
@@ -221,22 +223,13 @@ final class PRStore {
                 saveActivity()          // only rewrite the file when something was added
             }
         }
-        snapshot = Dictionary(uniqueKeysWithValues: prs.map { pr in
-            let mergeable = resolvedMergeable(pr.mergeable, previous: snapshot[pr.id]?.mergeable)
-            return (pr.id, SnapshotState(ciState: pr.ciState, reviewDecision: pr.reviewDecision,
-                                         mergeable: mergeable, awaitingReply: pr.awaitingMyReply))
-        })
+        snapshot = nextSnapshot(prs, previous: snapshot, keeping: failed)
         UserDefaults.standard.set(try? JSONEncoder().encode(snapshot), forKey: snapshotKey)
         didInitialFetch = true
     }
 
     private func saveActivity() {
         ActivityStore.save(activity)
-    }
-
-    /// Best-effort real timestamp for an event, from the PR's ISO8601 updatedAt.
-    private func eventDate(for pr: PullRequest) -> Date {
-        pr.updatedAt.flatMap(parseISODate) ?? Date()
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {
