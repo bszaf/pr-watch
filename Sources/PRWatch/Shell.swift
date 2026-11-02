@@ -5,20 +5,22 @@ func shellQuote(_ s: String) -> String {
     "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
-/// Run a process to completion; trimmed stdout on exit 0 with non-empty output, else nil.
+/// Run a process to completion; trimmed stdout on exit 0 (or any exit, when not
+/// `requireSuccess`) with non-empty output, else nil.
 /// Blocks the calling thread — from async code go through `runBlocking`.
-func runCapturing(_ launch: String, _ args: [String]) -> String? {
+func runCapturing(_ launch: String, _ args: [String], requireSuccess: Bool = true) -> String? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: launch)
     p.arguments = args
     let out = Pipe()
     p.standardOutput = out
-    p.standardError = Pipe()
+    p.standardError = FileHandle.nullDevice
     do { try p.run() } catch { return nil }
+    // Drain before waiting: output beyond the 64 KB pipe buffer otherwise deadlocks both sides.
+    let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
-    guard p.terminationStatus == 0 else { return nil }
-    let s = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard p.terminationStatus == 0 || !requireSuccess else { return nil }
+    let s = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     return s.isEmpty ? nil : s
 }
 

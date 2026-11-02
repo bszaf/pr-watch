@@ -46,6 +46,13 @@ import Testing
         // Every activity kind appears in the feed — can't silently rot.
         #expect(Set(DemoData.activity.map(\.kind)) == Set(ActivityKind.allCases))
 
+        // Every agent state, and both ways a session attaches to a PR (link, head branch).
+        let agents = DemoData.agentSessions
+        #expect(Set(agents.map(\.state)) == Set(AgentState.allCases))
+        #expect(agents.contains { s in !s.prLinks.isEmpty && prs.contains { s.works(on: $0) } })
+        #expect(agents.contains { s in s.prLinks.isEmpty && prs.contains { s.works(on: $0) } })
+        #expect(agents.contains { $0.tty != nil } && agents.contains { $0.tty == nil })
+
         // At least one PR routes to each of Mine / Review / Others.
         #expect(prs.contains { $0.isMine })
         #expect(prs.contains { $0.isReview && !$0.isMine })

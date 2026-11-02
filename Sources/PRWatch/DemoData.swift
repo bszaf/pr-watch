@@ -44,6 +44,30 @@ enum DemoData {
 
     static var activity: [ActivityEvent] { activityFeed }
 
+    /// One session per agent state: matched to a PR by head branch, by a `pr-link`, and
+    /// unmatched, with and without a running terminal — so every agent UI variant renders.
+    static var agentSessions: [AgentSession] {
+        [
+            agent("demo-waiting", "Adaptive polling for in-flight CI", "app", branch: altoBranch,
+                  repo: app, state: .waiting, minsAgo: 1, tty: "/dev/ttys004"),
+            agent("demo-idle", "Fix GitLab token refresh review comments", "app-token-refresh",
+                  branch: "octocat/gitlab-token", repo: app, state: .idle, minsAgo: 4,
+                  links: [PRLink(repo: app, number: 1479, url: "https://github.com/\(app)/pull/1479")]),
+            agent("demo-working", "Migrate analytics to the new SDK", "webapp",
+                  branch: "octocat/analytics-sdk", repo: "acme/webapp", state: .working, minsAgo: 0),
+            agent("demo-inactive", nil, "infra", branch: "release/2.0", repo: "acme/infra",
+                  state: .inactive, minsAgo: 95),
+        ]
+    }
+
+    private static func agent(_ id: String, _ title: String?, _ folder: String, branch: String,
+                              repo: String, state: AgentState, minsAgo n: Int,
+                              links: [PRLink] = [], tty: String? = nil) -> AgentSession {
+        AgentSession(id: id, title: title, lastPrompt: "Address the review comments and push",
+                     cwd: "\(home)/projects/\(folder)", branch: branch, repo: repo, prLinks: links,
+                     lastActivity: minsAgo(n), state: state, tty: tty)
+    }
+
     // MARK: - Curated PR set (spans Mine / Review / Others and every status combination)
 
     private static var curated: [PullRequest] {

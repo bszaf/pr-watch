@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Which terminal to open a project in.
 enum TerminalApp: String, CaseIterable, Identifiable {
@@ -31,6 +32,61 @@ enum TerminalLauncher {
             guard !cmd.trimmingCharacters(in: .whitespaces).isEmpty else { return }
             shell(cmd)
         }
+    }
+
+    /// Bring the iTerm2/Terminal tab that owns `tty` to the front, else open a new one in `path`.
+    @MainActor
+    static func focusOrOpen(tty: String?, path: String, settings: AppSettings) async {
+        if let tty {
+            // Only script terminals that are already running — `tell` would launch them.
+            let apps = [("com.googlecode.iterm2", itermFocusScript), ("com.apple.Terminal", terminalFocusScript)]
+                .filter { !NSRunningApplication.runningApplications(withBundleIdentifier: $0.0).isEmpty }
+                .map { $0.1(tty) }
+            let focused = await runBlocking {
+                apps.contains { runCapturing("/usr/bin/osascript", ["-e", $0]) == "ok" }
+            }
+            if focused { return }
+        }
+        open(path: path, settings: settings)
+    }
+
+    private static func itermFocusScript(tty: String) -> String {
+        """
+        tell application "iTerm"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if tty of s is "\(appleEscape(tty))" then
+                  tell w to select
+                  tell t to select
+                  tell s to select
+                  activate
+                  return "ok"
+                end if
+              end repeat
+            end repeat
+          end repeat
+          return "none"
+        end tell
+        """
+    }
+
+    private static func terminalFocusScript(tty: String) -> String {
+        """
+        tell application "Terminal"
+          repeat with w in windows
+            repeat with t in tabs of w
+              if tty of t is "\(appleEscape(tty))" then
+                set selected tab of w to t
+                set index of w to 1
+                activate
+                return "ok"
+              end if
+            end repeat
+          end repeat
+          return "none"
+        end tell
+        """
     }
 
     private static func itermScript(path: String) -> String {
