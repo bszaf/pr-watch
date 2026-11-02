@@ -35,8 +35,9 @@ first launch macOS asks to allow notifications — **click Allow** (needed for c
 banners; otherwise it falls back to a non-clickable banner).
 
 You'll get:
-- a **window** with *Mine / Review / Others / Activity / Projects* tabs, and
-- a **menu-bar item** (a ✓ checklist icon + open-PR count) with a quick dropdown.
+- a **window** with *Mine / Review / Others / Agents / Activity / Projects* tabs, and
+- a **menu-bar item** (a ✓ checklist icon + open-PR count; a ✋ hand while an AI agent may
+  need you) with a quick dropdown listing live agent sessions and open PRs.
 
 Daily use: just double-click **`PR Watch.app`** (or `open "PR Watch.app"`). To run it at
 login, toggle **Settings → Launch at login**. Re-running `./build.sh` rebuilds and relaunches.
@@ -99,6 +100,18 @@ Tabs (segmented control in the titlebar):
 - **Mine** — PRs/MRs you authored (matched against each provider's own viewer).
 - **Review** — review requested from you, directly or via a team you're on.
 - **Others** — PRs that @-mention you, plus PRs you individually watch.
+- **Agents** — your Claude Code sessions from the last 24 hours, read-only from their
+  transcripts in `~/.claude/projects` (nothing to install, no API calls). Each shows its
+  title, folder, branch, and state: **Working**, **May need you** (no output for 15s+ after a
+  tool call — usually a permission prompt, sometimes a long command; never shown when
+  permissions are bypassed), **Finished** (turn over — your move), or **Inactive** (silent
+  mid-turn for a long time). A session is tied to a PR when it created/linked it or sits on
+  its head branch; that PR's row gets an *agent* badge. The **Repositories** filter applies
+  here too (by the session folder's origin repo or a linked PR). The terminal button
+  switches to the iTerm2/Terminal tab already running that `claude` process (matched by
+  tty), or opens a new one in the session folder when none is running. Banners fire when an agent finishes
+  or may need you. The transcript format is Claude Code's internal one, so states are a
+  best-effort heuristic.
 - **Activity** — a persisted history of every change (CI, reviews, conflicts) with
   timestamps (CI/conflict events when detected, review/comment events at the PR's update time); click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
@@ -126,11 +139,12 @@ Native tabbed preferences:
 - **Sources** — enable/disable **GitHub** and **GitLab**, each showing its active source
   (e.g. `Using: gh — user:bszaf` or `Using: gitlab — no CLI`), a Keychain PAT field, and (for
   GitLab) the host URL; **watch scope** (authored and/or review-requested and/or mentions);
-  and **Repositories** — a list limiting which repos to watch (empty = all), with suggestions
+  and **Repositories** — a list limiting which repos to watch, PRs and agent sessions alike (empty = all), with suggestions
   drawn from local projects and open PRs.
 - **Projects** — folders to scan for local git projects, and which **terminal** to open a
-  project in (iTerm2 new tab / Terminal / custom `{path}` command).
-- **Notifications** — CI / review / merge-conflict / comment-awaiting-reply trigger toggles +
+  project in (iTerm2 new tab / Terminal / custom `{path}` command); and **AI agents** —
+  toggle Claude Code session tracking.
+- **Notifications** — CI / review / merge-conflict / comment-awaiting-reply / AI-agent trigger toggles +
   "Send test notification".
 
 Individually-watched PRs live in the main window's **Watched PRs** popover.
@@ -150,6 +164,9 @@ Sources/PRWatch/
                            review-thread fetch, with a per-PR review-thread cache)
   GitLabClient.swift       GitLab token resolution + GraphQL (currentUser MRs) → shared model
   LocalProjects.swift      local git-project scanner + store (Projects tab, PR correlation)
+  AgentSessions.swift      Claude Code transcript parsing, state heuristic, incremental scanner
+  AgentStore.swift         @Observable live agent sessions + state-change notifications
+  AgentsView.swift         Agents tab, agent state icon/badge
   TerminalLauncher.swift   open a project in iTerm2 / Terminal / a custom command
   NotificationRules.swift  pure transition→activity/notification logic (unit-tested)
   Activity.swift           ActivityEvent + ActivityKind + versioned file store
@@ -158,7 +175,7 @@ Sources/PRWatch/
   Keychain.swift           per-provider PAT storage
   AppSettings.swift        @Observable settings persisted to UserDefaults
   LaunchAgent.swift        install/remove launchd LaunchAgent
-Tests/PRWatchTests/        Swift Testing suites (rules + mergeable dedupe + PR parsing)
+Tests/PRWatchTests/        Swift Testing suites (rules, mergeable dedupe, PR parsing, agent sessions)
 build.sh / test.sh
 scripts/toolchain.sh       CLT workarounds sourced by both (SDK pin, swift-testing plugin path)
 ```

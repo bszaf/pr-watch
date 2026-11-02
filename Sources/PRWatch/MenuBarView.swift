@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Environment(PRStore.self) private var store
+    @Environment(AgentStore.self) private var agents
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +17,34 @@ struct MenuBarView: View {
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
 
             Divider()
+
+            let liveAgents = agents.sessions.filter { $0.state != .inactive }
+            if !liveAgents.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(liveAgents) { session in
+                        Button {
+                            Task { await TerminalLauncher.focusOrOpen(tty: session.tty, path: session.cwd, settings: agents.settings) }
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 8) {
+                                AgentStateIcon(state: session.state)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(session.displayTitle).lineLimit(1)
+                                    Text(verbatim: "\(session.state.label) · \(session.folder)")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(MenuRowButtonStyle())
+                        .help(session.terminalHelp)
+                    }
+                }
+                .padding(.vertical, 4)
+                Divider()
+            }
 
             if let error = store.lastError, store.pullRequests.isEmpty {
                 Text(error).font(.caption).foregroundStyle(.secondary)

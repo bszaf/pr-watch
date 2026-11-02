@@ -11,11 +11,13 @@ final class AppSettings {
     var notifyReview: Bool { didSet { d.set(notifyReview, forKey: "notifyReview") } }
     var notifyConflicts: Bool { didSet { d.set(notifyConflicts, forKey: "notifyConflicts") } }
     var notifyComments: Bool { didSet { d.set(notifyComments, forKey: "notifyComments") } }
+    var notifyAgents: Bool { didSet { d.set(notifyAgents, forKey: "notifyAgents") } }
 
     // Providers
     var watchGitHub: Bool { didSet { d.set(watchGitHub, forKey: "watchGitHub") } }
     var watchGitLab: Bool { didSet { d.set(watchGitLab, forKey: "watchGitLab") } }
     var gitlabHost: String { didSet { d.set(gitlabHost, forKey: "gitlabHost") } }
+    var watchAgents: Bool { didSet { d.set(watchAgents, forKey: "watchAgents") } }
 
     // Watch scope
     var watchAuthored: Bool { didSet { d.set(watchAuthored, forKey: "watchAuthored") } }
@@ -49,6 +51,8 @@ final class AppSettings {
             "notifyReview": true,
             "notifyConflicts": true,
             "notifyComments": true,
+            "notifyAgents": true,
+            "watchAgents": true,
             "watchAuthored": true,
             "watchReviewRequested": true,
             "watchMentions": true,
@@ -64,6 +68,8 @@ final class AppSettings {
         notifyReview = d.bool(forKey: "notifyReview")
         notifyConflicts = d.bool(forKey: "notifyConflicts")
         notifyComments = d.bool(forKey: "notifyComments")
+        notifyAgents = d.bool(forKey: "notifyAgents")
+        watchAgents = d.bool(forKey: "watchAgents")
         watchAuthored = d.bool(forKey: "watchAuthored")
         watchReviewRequested = d.bool(forKey: "watchReviewRequested")
         watchMentions = d.bool(forKey: "watchMentions")

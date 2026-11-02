@@ -6,11 +6,13 @@ struct PRWatchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store: PRStore
     @State private var projects: ProjectStore
+    @State private var agents: AgentStore
 
     init() {
         let settings = AppSettings()
         _store = State(initialValue: PRStore(settings: settings))
         _projects = State(initialValue: ProjectStore(settings: settings))
+        _agents = State(initialValue: AgentStore(settings: settings))
     }
 
     var body: some Scene {
@@ -18,18 +20,22 @@ struct PRWatchApp: App {
             ContentView()
                 .environment(store)
                 .environment(projects)
+                .environment(agents)
                 // Min width keeps the titlebar segmented tabs from collapsing into overflow.
                 .frame(minWidth: 760, idealWidth: 860, minHeight: 520, idealHeight: 680)
                 .task { store.start() }
                 .task { await projects.scan() }
+                .task { agents.start() }
         }
         .windowResizability(.contentMinSize)
 
         MenuBarExtra {
             MenuBarView()
                 .environment(store)
+                .environment(agents)
         } label: {
-            Label(menuBarCount, systemImage: "checklist")
+            Label(menuBarCount, systemImage: agents.sessions.contains { $0.state == .waiting }
+                  ? "hand.raised.fill" : "checklist")
         }
         .menuBarExtraStyle(.window)
 
@@ -37,6 +43,7 @@ struct PRWatchApp: App {
             SettingsView()
                 .environment(store)
                 .environment(projects)
+                .environment(agents)
         }
     }
 

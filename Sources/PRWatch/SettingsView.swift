@@ -111,7 +111,7 @@ private struct SourcesSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Repositories") {
-                Text("Limit watching to these repos (owner/name). Empty = all repos.")
+                Text("Limit PRs and agent sessions to these repos (owner/name). Empty = all repos.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(settings.repoFilters, id: \.self) { repo in
                     HStack {
@@ -233,6 +233,7 @@ private struct SourcesSettings: View {
 private struct ProjectsSettings: View {
     @Environment(PRStore.self) private var store
     @Environment(ProjectStore.self) private var projects
+    @Environment(AgentStore.self) private var agents
 
     var body: some View {
         @Bindable var settings = store.settings
@@ -270,6 +271,12 @@ private struct ProjectsSettings: View {
                 Text("Opening iTerm2/Terminal may prompt for Automation permission the first time.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("AI agents") {
+                Toggle("Track Claude Code sessions", isOn: $settings.watchAgents)
+                    .onChange(of: settings.watchAgents) { Task { await agents.scan() } }
+                Text("Reads session transcripts in ~/.claude/projects (read-only — nothing is installed) and shows them in the Agents tab and on matching PRs.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
@@ -302,6 +309,7 @@ private struct NotificationSettings: View {
                 Toggle("Review activity happens", isOn: $settings.notifyReview)
                 Toggle("A merge conflict appears", isOn: $settings.notifyConflicts)
                 Toggle("A comment awaits my reply", isOn: $settings.notifyComments)
+                Toggle("An AI agent finishes or may need me", isOn: $settings.notifyAgents)
             }
             Section("Test") {
                 Button("Send test notification") {

@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(PRStore.self) private var store
     @Environment(ProjectStore.self) private var projects
+    @Environment(AgentStore.self) private var agents
     @Environment(\.openSettings) private var openSettings
     @State private var tab: Tab = .mine
     @State private var showFilters = false
@@ -11,6 +12,7 @@ struct ContentView: View {
         case mine = "Mine"
         case review = "Review"
         case others = "Others"
+        case agents = "Agents"
         case activity = "Activity"
         case projects = "Projects"
         var id: String { rawValue }
@@ -28,7 +30,7 @@ struct ContentView: View {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 14) {
                         tabGroup([.mine, .review, .others])   // pull requests
-                        tabGroup([.activity, .projects])      // views
+                        tabGroup([.agents, .activity, .projects])   // views
                     }
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -67,6 +69,7 @@ struct ContentView: View {
             Button {
                 Task { await store.refresh() }
                 Task { await projects.scan() }
+                Task { await agents.scan() }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -89,6 +92,7 @@ struct ContentView: View {
             // Mentioned / watched — the "someone pinged me" bucket, excluding mine & review.
             prList(store.pullRequests.filter { !$0.isMine && !$0.isReview },
                    emptyLabel: "No mentions or watched PRs")
+        case .agents: AgentsView()
         case .activity: ActivityView()
         case .projects: ProjectsView()
         }
@@ -357,6 +361,7 @@ struct ActivityRow: View {
 struct PRRow: View {
     let pr: PullRequest
     @Environment(ProjectStore.self) private var projects
+    @Environment(AgentStore.self) private var agents
     @State private var expanded = false
 
     private var subtitle: String {
@@ -422,6 +427,10 @@ struct PRRow: View {
                 Text(verbatim: subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if let session = agents.session(for: pr), session.state != .inactive {
+                AgentStateBadge(state: session.state)
+                    .help("Agent: \(session.displayTitle) — \(session.state.help)")
+            }
             if let project = projects.project(for: pr) {
                 Button {
                     TerminalLauncher.open(path: project.path, settings: projects.settings)
