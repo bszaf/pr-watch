@@ -23,17 +23,22 @@ enum Keychain {
         return token
     }
 
-    static func setToken(_ token: String, account: String) {
-        deleteToken(account: account)
-        guard !token.isEmpty else { return }
-        let query: [String: Any] = [
+    /// Updates in place so a failed write never destroys the previously stored token.
+    @discardableResult
+    static func setToken(_ token: String, account: String) -> Bool {
+        guard !token.isEmpty else { deleteToken(account: account); return true }
+        let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecValueData as String: Data(token.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        let data = Data(token.utf8)
+        let status = SecItemUpdate(match as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard status == errSecItemNotFound else { return status == errSecSuccess }
+        var add = match
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func deleteToken(account: String) {

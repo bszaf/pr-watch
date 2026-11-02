@@ -168,8 +168,11 @@ private struct SourcesSettings: View {
     private func tokenButtons(provider: Provider, input: Binding<String>, blankHint: String) -> some View {
         HStack {
             Button("Save token") {
-                Keychain.setToken(input.wrappedValue.trimmingCharacters(in: .whitespaces),
-                                  account: provider.keychainAccount)
+                guard Keychain.setToken(input.wrappedValue.trimmingCharacters(in: .whitespaces),
+                                        account: provider.keychainAccount) else {
+                    flash("Couldn't save the \(provider.label) token to Keychain.")
+                    return
+                }
                 invalidateTokenCache(provider)
                 input.wrappedValue = ""
                 flash("\(provider.label) token saved to Keychain.")

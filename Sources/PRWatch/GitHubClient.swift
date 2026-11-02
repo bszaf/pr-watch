@@ -90,29 +90,14 @@ struct GitHubClient {
         if let pat = Keychain.readToken(account: Provider.github.keychainAccount) {
             return ResolvedToken(token: pat, source: .keychain)
         }
-        if let t = run("/bin/zsh", ["-lc", "gh auth token"]) { return ResolvedToken(token: t, source: .cli) }
+        if let t = runCapturing("/bin/zsh", ["-lc", "gh auth token"]) { return ResolvedToken(token: t, source: .cli) }
         for path in ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"] where FileManager.default.isExecutableFile(atPath: path) {
-            if let t = run(path, ["auth", "token"]) { return ResolvedToken(token: t, source: .cli) }
+            if let t = runCapturing(path, ["auth", "token"]) { return ResolvedToken(token: t, source: .cli) }
         }
         if let env = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !env.isEmpty {
             return ResolvedToken(token: env, source: .env)
         }
         return nil
-    }
-
-    private static func run(_ launch: String, _ args: [String]) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: launch)
-        p.arguments = args
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let s = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
     }
 
     // MARK: - Fetch
@@ -126,7 +111,7 @@ struct GitHubClient {
     func fetch(cache: [String: CachedReview]) async throws -> ProviderResult {
         guard let qA = queryPhaseA() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         // No token isn't an error — GitHub is just "not configured" (matches GitLab).
-        guard var resolved = Self.resolveToken() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
+        guard var resolved = await runBlocking({ Self.resolveToken() }) else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
 
         var (dataA, remA, resetA): (Data, Int?, Date?)
         do {
@@ -134,7 +119,7 @@ struct GitHubClient {
         } catch GitHubError.http(401, _) {
             // Stale cached token (e.g. expired gh OAuth token) — re-resolve once and retry.
             Self.invalidateTokenCache()
-            guard let refreshed = Self.resolveToken() else { throw GitHubError.http(401, "token expired") }
+            guard let refreshed = await runBlocking({ Self.resolveToken() }) else { throw GitHubError.http(401, "token expired") }
             resolved = refreshed
             (dataA, remA, resetA) = try await post(qA, token: refreshed.token)
         }

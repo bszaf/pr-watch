@@ -38,18 +38,7 @@ enum ProjectScanner {
     }
 
     private static func git(_ dir: String, _ args: [String]) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        p.arguments = ["-C", dir] + args
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
-        let s = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
+        runCapturing("/usr/bin/git", ["-C", dir] + args)
     }
 
     /// "git@github.com:owner/repo.git" or "https://host/owner/repo.git" -> "owner/repo".
@@ -82,7 +71,7 @@ final class ProjectStore {
         if settings.demoMode { loadDemo(); return }
         isScanning = true
         let roots = settings.scanRoots
-        projects = await Task.detached { ProjectScanner.scan(roots: roots) }.value
+        projects = await runBlocking { ProjectScanner.scan(roots: roots) }
         byRepoBranch = Dictionary(
             projects.compactMap { p in Self.key(p.repo, p.branch).map { ($0, p) } },
             uniquingKeysWith: { first, _ in first }

@@ -60,11 +60,6 @@ enum TerminalLauncher {
         """
     }
 
-    /// Single-quote for the shell (handles spaces and embedded quotes).
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Escape for an AppleScript double-quoted string literal.
     private static func appleEscape(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")

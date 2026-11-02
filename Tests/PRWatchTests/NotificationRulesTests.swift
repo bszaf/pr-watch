@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import PRWatch
 
 private func pr(
@@ -153,5 +154,41 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: 
             previous: prev, triggers: allOn
         )
         #expect(n.count == 3)
+    }
+}
+
+private func provPR(_ provider: Provider, _ number: Int, ci: CheckState?, mergeable: Mergeable = .mergeable) -> PullRequest {
+    let repo = provider == .github ? "Acme/app" : "group/proj"
+    return PullRequest(
+        id: "\(provider.rawValue):\(repo)#\(number)", provider: provider, number: number, title: "T",
+        url: "https://example.com", isDraft: false, repo: repo, author: "bszaf", headBranch: nil,
+        reviewDecision: nil, mergeable: mergeable, ciState: ci, approvers: [], changeRequesters: [],
+        pendingReviewers: [], baseBranch: nil, additions: nil, deletions: nil,
+        labels: [], comments: nil, updatedAt: nil
+    )
+}
+
+@Suite struct SnapshotAndEventDateTests {
+    @Test func failedProviderKeepsItsEntriesWhileSucceededProviderIsReplaced() {
+        let previous: [String: SnapshotState] = [
+            "github:Acme/app#1": SnapshotState(ciState: .pending, reviewDecision: nil, mergeable: .mergeable),
+            "gitlab:group/proj#2": SnapshotState(ciState: .success, reviewDecision: nil, mergeable: .conflicting),
+            "gitlab:group/proj#3": SnapshotState(ciState: .success, reviewDecision: nil, mergeable: .mergeable),
+        ]
+        let next = nextSnapshot([provPR(.gitlab, 2, ci: .failure, mergeable: .unknown)],
+                                previous: previous, keeping: [.github])
+        #expect(next == [
+            "github:Acme/app#1": SnapshotState(ciState: .pending, reviewDecision: nil, mergeable: .mergeable),
+            "gitlab:group/proj#2": SnapshotState(ciState: .failure, reviewDecision: nil, mergeable: .conflicting),
+        ])
+    }
+
+    @Test func ciAndConflictEventsAreDatedNowNotAtUpdatedAt() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let stale = "2026-01-01T10:00:00Z"
+        #expect(eventDate(for: .ciPassed, updatedAt: stale, now: now) == now)
+        #expect(eventDate(for: .conflict, updatedAt: stale, now: now) == now)
+        #expect(eventDate(for: .approved, updatedAt: stale, now: now) == parseISODate(stale))
+        #expect(eventDate(for: .approved, updatedAt: nil, now: now) == now)
     }
 }
