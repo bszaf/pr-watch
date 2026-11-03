@@ -14,7 +14,10 @@ struct MenuBarView: View {
                 Spacer()
                 if store.isRefreshing { ProgressView().controlSize(.small) }
             }
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 2)
+            Text(verbatim: todaySummary)
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.bottom, 6)
 
             Divider()
 
@@ -97,6 +100,14 @@ struct MenuBarView: View {
             .padding(.horizontal, 6).padding(.vertical, 6)
         }
         .frame(width: 340)
+    }
+
+    private var todaySummary: String {
+        let p = dailyProgress(activity: store.activity, prs: store.pullRequests, agents: agents.sessions, now: Date())
+        var parts = ["Today: \(p.merged) merged", "\(p.openMine) open"]
+        if p.failingCI > 0 { parts.append("\(p.failingCI) red CI") }
+        if p.agentsNeedYou > 0 { parts.append("\(p.agentsNeedYou) agent\(p.agentsNeedYou == 1 ? "" : "s") need you") }
+        return parts.joined(separator: " · ")
     }
 
     private func menuButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {

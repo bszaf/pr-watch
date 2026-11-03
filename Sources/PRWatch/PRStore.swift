@@ -29,6 +29,8 @@ final class PRStore {
     private var timer: Timer?
     private var lastPRs: [Provider: [PullRequest]] = [:]   // keep last good results per provider
     private var githubThreadCache: [String: CachedReview] = [:]   // per-PR review cache; only re-fetched when a PR changes
+    private var githubChecksCache: [String: CachedChecks] = [:]
+    private var reported: [PullRequest] = []   // as fetched, before ignored checks are applied
     private var snapshot: [String: SnapshotState] = [:]
     private var lastChangeAt: Date?
     private let recentChangeWindow: TimeInterval = 120
@@ -78,7 +80,12 @@ final class PRStore {
         }
     }
 
-    private struct Loaded { let prs: [PullRequest]; let status: ProviderStatus }
+    private struct Loaded {
+        let prs: [PullRequest]
+        let status: ProviderStatus
+        var closed: [ClosedPR] = []
+        var unresolvedVanished: Set<String> = []
+    }
 
     func refresh() async {
         guard !isRefreshing else { return }
@@ -98,10 +105,14 @@ final class PRStore {
         var statuses: [Provider: ProviderStatus] = [:]
         var errors: [String] = []
         var failed: Set<Provider> = []
+        var closed: [ClosedPR] = []
+        var retained: Set<String> = []
         for provider in Provider.allCases {
             if let loaded = results[provider] ?? nil {
                 statuses[provider] = loaded.status
                 merged += loaded.prs
+                closed += loaded.closed
+                retained.formUnion(loaded.unresolvedVanished)
                 if let user = loaded.status.user, !user.isEmpty { viewerLogins[provider] = user }
                 if let err = loaded.status.error {
                     errors.append("\(provider.label): \(err)")
@@ -121,10 +132,27 @@ final class PRStore {
         lastUpdated = Date()
         lastError = merged.isEmpty && !errors.isEmpty ? errors.joined(separator: "\n") : nil
 
-        diffAndNotify(merged, failed: failed)
-        pullRequests = merged.sorted {
-            $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo
+        reported = merged
+        let applied = applyingIgnoredChecks(merged)
+        diffAndNotify(applied, closed: closed, failed: failed, retaining: retained)
+        pullRequests = applied
+    }
+
+    private func applyingIgnoredChecks(_ prs: [PullRequest]) -> [PullRequest] {
+        prs.map { pr in
+            let demo = settings.demoMode ? DemoData.ignoredChecks[pr.repo] ?? [] : []
+            return pr.applyingIgnoredChecks(settings.ignoredChecks(in: pr.repo).union(demo))
         }
+            .sorted { $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo }
+    }
+
+    /// Ignore (or stop ignoring) check `name` in `repo`, taking effect immediately. The snapshot
+    /// takes the new CI state silently: a settings change isn't a CI event to notify about.
+    func setCheck(_ name: String, ignored: Bool, in repo: String) {
+        settings.setCheck(name, ignored: ignored, in: repo)
+        pullRequests = applyingIgnoredChecks(settings.demoMode ? DemoData.pullRequests : reported)
+        snapshot = adoptingCIStates(pullRequests, into: snapshot)
+        UserDefaults.standard.set(try? JSONEncoder().encode(snapshot), forKey: snapshotKey)
     }
 
     /// Fetch one provider, translating success/failure into a `Loaded` (never throws).
@@ -145,7 +173,8 @@ final class PRStore {
                 result = try await GitHubClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
                     mentioned: settings.watchMentions,
-                    repoFilters: settings.repoFilters, customPRs: settings.customPRs).fetch(cache: githubThreadCache)
+                    repoFilters: settings.repoFilters, customPRs: settings.customPRs)
+                    .fetch(cache: githubThreadCache, checksCache: githubChecksCache, known: Set(snapshot.keys.filter { $0.hasPrefix("github:") }))
             case .gitlab:
                 result = try await GitLabClient(
                     authored: settings.watchAuthored, reviewRequested: settings.watchReviewRequested,
@@ -155,6 +184,7 @@ final class PRStore {
             // Proactive backoff: pause before the quota hits zero.
             if provider == .github {
                 if let tc = result.threadCache { githubThreadCache = tc }
+                if let cc = result.checksCache { githubChecksCache = cc }
                 if let rem = result.rateLimitRemaining, rem < 100, let reset = result.rateLimitResetAt {
                     rateLimitedUntil = reset
                 } else {
@@ -162,7 +192,8 @@ final class PRStore {
                 }
             }
             return Loaded(prs: result.prs, status: ProviderStatus(
-                enabled: true, source: result.source, user: result.viewerLogin, error: nil))
+                enabled: true, source: result.source, user: result.viewerLogin, error: nil),
+                closed: result.closed, unresolvedVanished: result.unresolvedVanished)
         } catch {
             if case let GitHubError.rateLimited(reset) = error {
                 rateLimitedUntil = reset ?? Date().addingTimeInterval(600)
@@ -189,9 +220,7 @@ final class PRStore {
         activity = DemoData.activity
         lastError = nil
         lastUpdated = Date()
-        pullRequests = DemoData.pullRequests.sorted {
-            $0.repo == $1.repo ? $0.number > $1.number : $0.repo < $1.repo
-        }
+        pullRequests = applyingIgnoredChecks(DemoData.pullRequests)
     }
 
     func clearActivity() {
@@ -199,20 +228,34 @@ final class PRStore {
         saveActivity()
     }
 
-    private func diffAndNotify(_ prs: [PullRequest], failed: Set<Provider>) {
+    private func diffAndNotify(_ prs: [PullRequest], closed: [ClosedPR], failed: Set<Provider>,
+                               retaining retained: Set<String>) {
         let triggers = Triggers(ci: settings.notifyCI, review: settings.notifyReview,
-                                conflicts: settings.notifyConflicts, comments: settings.notifyComments)
+                                conflicts: settings.notifyConflicts, comments: settings.notifyComments,
+                                merged: settings.notifyMerged)
         if didInitialFetch {
             var events: [ActivityEvent] = []
             for pr in prs {
                 for kind in transitions(for: pr, previous: snapshot[pr.id]) {
                     events.append(ActivityEvent(
                         date: eventDate(for: kind, updatedAt: pr.updatedAt, now: Date()), prId: pr.id, repo: pr.repo,
-                        number: pr.number, ref: pr.ref, title: pr.title, url: pr.url, kind: kind))
+                        number: pr.number, ref: pr.ref, title: pr.title, url: pr.url, kind: kind,
+                        mine: pr.isMine))
                     if isEnabled(kind, triggers) {
                         let n = notification(for: kind, pr: pr)
                         Notifier.notify(title: n.title, body: n.body, url: pr.url)
                     }
+                }
+            }
+            for c in closed {
+                let kind: ActivityKind = c.merged ? .merged : .closed
+                let mine = !c.author.isEmpty && c.author == viewerLogins[.github]
+                events.append(ActivityEvent(
+                    date: c.date, prId: c.id, repo: c.repo, number: c.number, ref: "#\(c.number)",
+                    title: c.title, url: c.url, kind: kind, mine: mine))
+                if mine && isEnabled(kind, triggers) {
+                    let n = closedNotification(c)
+                    Notifier.notify(title: n.title, body: n.body, url: c.url)
                 }
             }
             if !events.isEmpty {
@@ -223,7 +266,7 @@ final class PRStore {
                 saveActivity()          // only rewrite the file when something was added
             }
         }
-        snapshot = nextSnapshot(prs, previous: snapshot, keeping: failed)
+        snapshot = nextSnapshot(prs, previous: snapshot, keeping: failed, retaining: retained)
         UserDefaults.standard.set(try? JSONEncoder().encode(snapshot), forKey: snapshotKey)
         didInitialFetch = true
     }

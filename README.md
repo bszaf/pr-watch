@@ -37,7 +37,7 @@ banners; otherwise it falls back to a non-clickable banner).
 You'll get:
 - a **window** with *Mine / Review / Others / Agents / Activity / Projects* tabs, and
 - a **menu-bar item** (a ✓ checklist icon + open-PR count; a ✋ hand while an AI agent may
-  need you) with a quick dropdown listing live agent sessions and open PRs.
+  need you) with a quick dropdown: a one-line summary of today, live agent sessions, and open PRs.
 
 Daily use: just double-click **`PR Watch.app`** (or `open "PR Watch.app"`). To run it at
 login, toggle **Settings → Launch at login**. Re-running `./build.sh` rebuilds and relaunches.
@@ -70,7 +70,10 @@ rolling [`latest` release](https://github.com/bszaf/pr-watch/releases/tag/latest
     just the light fields (identity, CI check rollup, review decision, mergeable). Phase B,
     the expensive reviews/threads query, only runs for PRs that are new, whose `updatedAt`
     moved, or that still have unresolved threads; everything else reuses the per-PR review
-    cache.
+    cache. The same phase-B request also fetches the final state of PRs that dropped out of
+    the open set since the last poll, to record them as merged or closed, and the individual
+    checks of PRs whose CI is failing — only when their head commit or per-state check counts
+    (from phase A) moved.
   - *GitLab*: GraphQL `currentUser.authoredMergeRequests` / `reviewRequestedMergeRequests`,
     mapping pipeline status → CI, `conflicts` → merge conflict, `approved` → review. Refs
     render as `!123` (GitLab) vs `#123` (GitHub).
@@ -91,7 +94,8 @@ rolling [`latest` release](https://github.com/bszaf/pr-watch/releases/tag/latest
   with an `osascript` fallback if UN isn't authorized. Approval/changes banners name the
   reviewer (e.g. *"👍 Approved by @alice — app #123"*). A comment-awaiting-reply banner
   only fires for threads you're part of (your own PR, or a thread you opened) where the
-  other side has the last word. Test button in Settings.
+  other side has the last word. *"🎉 Merged"* / *"🚫 Closed"* banners fire only for PRs you
+  authored. Test button in Settings.
 
 ## Window
 
@@ -109,19 +113,37 @@ Tabs (segmented control in the titlebar):
   its head branch; that PR's row gets an *agent* badge. The **Repositories** filter applies
   here too (by the session folder's origin repo or a linked PR). The terminal button
   switches to the iTerm2/Terminal tab already running that `claude` process (matched by
-  tty), or opens a new one in the session folder when none is running. Banners fire when an agent finishes
+  tty), or opens a new one in the session folder when none is running. Each process is tied
+  to its own session via `~/.claude/sessions/<pid>.json`, so several sessions in one folder
+  each get the right tab; a process without that file falls back to the newest session in
+  its folder. Banners fire when an agent finishes
   or may need you. The transcript format is Claude Code's internal one, so states are a
   best-effort heuristic.
-- **Activity** — a persisted history of every change (CI, reviews, conflicts) with
+- **Activity** — a **Today** strip on top (my PRs merged/closed today, my open PRs with red
+  CI / in review / approved, agents working / needing you), then a persisted history of
+  every change (CI, reviews, conflicts, merged, closed) with
   timestamps (CI/conflict events when detected, review/comment events at the PR's update time); click a row to open the PR. Stored as a versioned, human-readable JSON file
   at `~/Library/Application Support/PRWatch/activity.json` (`{"version": 1, "events": […]}`)
   so the format can evolve without breaking old data.
 - **Projects** — local git projects/worktrees found under your configurable scan folders
-  (Settings → Projects), each showing branch + origin repo, opened in your terminal.
+  (Settings → Projects), rescanned every minute. Each shows branch, origin repo, last commit,
+  uncommitted changes, the agent working in it, and **no open PR** for a feature branch
+  with recent (7 days) or uncommitted work but no open PR. Such a row can hand the branch
+  to an agent ("finish the work and open a PR").
 
-**Expandable PR rows** — click a PR to reveal details: reviewers (approved / changes /
+**Expandable PR rows** — click a PR to reveal details: failing checks (GitHub; summary on
+hover, a link to their run, and an eye button to ignore the check in that repo or undo it),
+reviewers (approved / changes /
 **pending**), metadata (base branch, +/−, labels, updated, comments), and the matched local
-worktree with Terminal/Finder actions.
+worktree with Terminal/Finder/Send-to-agent actions.
+
+**Send to agent** — on my PRs with red CI, a conflict, or review feedback, a ✈︎ button hands
+the PR to an agent with a one-line task built from its state (e.g. *"CI is failing — find
+the failing checks with `gh pr checks 12`…"*). If the PR's agent session is running in
+iTerm2 and has finished its turn, the prompt is typed into it. A busy session (working or
+maybe waiting for approval) is switched to with the prompt on the clipboard, since typing
+could answer a permission prompt. Without a running session, a new agent starts in the PR's
+worktree via the configurable agent command (`claude {prompt}`).
 
 **PR ↔ project correlation** — matched on `owner/repo` + head branch. A PR with a local
 worktree shows a terminal chip (opens the worktree); a Projects row shows a chip back to its
@@ -142,10 +164,15 @@ Native tabbed preferences:
   and **Repositories** — a list limiting which repos to watch, PRs and agent sessions alike (empty = all), with suggestions
   drawn from local projects and open PRs.
 - **Projects** — folders to scan for local git projects, and which **terminal** to open a
-  project in (iTerm2 new tab / Terminal / custom `{path}` command); and **AI agents** —
-  toggle Claude Code session tracking.
-- **Notifications** — CI / review / merge-conflict / comment-awaiting-reply / AI-agent trigger toggles +
+  project in (iTerm2 new tab / Terminal / custom `{path}` command, plus `{command}` to run
+  Send-to-agent's command); and **AI agents** — toggle Claude Code session tracking and set
+  the agent command.
+- **Notifications** — CI / review / merge-conflict / comment-awaiting-reply / merged-or-closed (my PRs) / AI-agent trigger toggles +
   "Send test notification".
+- **Checks** — per-repo **ignored checks** (GitHub). A failing ignored check (e.g. an
+  approval gate that isn't a build) doesn't turn the PR's CI red, mark it for an agent, or
+  send CI notifications; it still blocks merging if required. Add one by repo + check name,
+  with suggestions from checks seen failing, or straight from an expanded PR.
 
 Individually-watched PRs live in the main window's **Watched PRs** popover.
 
@@ -157,7 +184,7 @@ Sources/PRWatch/
   PRWatchApp.swift         @main: WindowGroup + MenuBarExtra + Settings; UN click handling
   ContentView.swift        window: titlebar tabs, expandable PR rows, Projects, status footer
   MenuBarView.swift        menu-bar dropdown: compact list + refresh/window/settings/quit
-  SettingsView.swift       tabbed prefs: General / Sources / Projects / Notifications
+  SettingsView.swift       tabbed prefs: General / Sources / Projects / Notifications / Checks
   PRStore.swift            @Observable @MainActor: concurrent multi-provider fetch + diff→notify
   Provider.swift           Provider enum, token source, per-provider status model
   GitHubClient.swift       GitHub token resolution + two-phase GraphQL (light list + targeted
@@ -167,6 +194,8 @@ Sources/PRWatch/
   AgentSessions.swift      Claude Code transcript parsing, state heuristic, incremental scanner
   AgentStore.swift         @Observable live agent sessions + state-change notifications
   AgentsView.swift         Agents tab, agent state icon/badge
+  AgentHandoff.swift       Send to agent: prompt from PR state, handoff plan, delivery
+  DailyProgress.swift      Today's tally (Activity strip, menu-bar summary)
   TerminalLauncher.swift   open a project in iTerm2 / Terminal / a custom command
   NotificationRules.swift  pure transition→activity/notification logic (unit-tested)
   Activity.swift           ActivityEvent + ActivityKind + versioned file store

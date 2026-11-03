@@ -20,7 +20,7 @@ private func pr(
     )
 }
 
-private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: true)
+private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: true, merged: true)
 
 @Suite struct NotificationRulesTests {
     @Test func firstSightingNeverNotifies() {
@@ -56,7 +56,7 @@ private let allOn = Triggers(ci: true, review: true, conflicts: true, comments: 
 
     @Test func disabledTriggerSuppresses() {
         let prev = SnapshotState(pr(ci: .pending))
-        let triggers = Triggers(ci: false, review: true, conflicts: true, comments: true)
+        let triggers = Triggers(ci: false, review: true, conflicts: true, comments: true, merged: true)
         let n = notifications(for: pr(ci: .failure), previous: prev, triggers: triggers)
         #expect(n.isEmpty)
     }

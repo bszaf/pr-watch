@@ -7,6 +7,7 @@ enum ActivityKind: String, Codable, Sendable, CaseIterable {
     case approved, changesRequested, reviewRequested
     case conflict
     case commentAwaitingReply
+    case merged, closed
 
     var label: String {
         switch self {
@@ -17,6 +18,8 @@ enum ActivityKind: String, Codable, Sendable, CaseIterable {
         case .reviewRequested: "Review requested"
         case .conflict: "Merge conflict"
         case .commentAwaitingReply: "Comment awaiting reply"
+        case .merged: "Merged"
+        case .closed: "Closed"
         }
     }
 
@@ -29,6 +32,8 @@ enum ActivityKind: String, Codable, Sendable, CaseIterable {
         case .reviewRequested: "eye.fill"
         case .conflict: "exclamationmark.triangle.fill"
         case .commentAwaitingReply: "bubble.left.and.bubble.right.fill"
+        case .merged: "arrow.triangle.merge"
+        case .closed: "xmark.square.fill"
         }
     }
 }
@@ -43,6 +48,7 @@ struct ActivityEvent: Identifiable, Codable, Sendable, Equatable {
     let title: String
     let url: String
     let kind: ActivityKind
+    var mine: Bool?           // authored by me; nil in events recorded before this field existed
 }
 
 /// Persists the activity feed to a versioned JSON file under Application Support.

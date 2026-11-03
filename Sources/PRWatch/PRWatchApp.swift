@@ -24,7 +24,7 @@ struct PRWatchApp: App {
                 // Min width keeps the titlebar segmented tabs from collapsing into overflow.
                 .frame(minWidth: 760, idealWidth: 860, minHeight: 520, idealHeight: 680)
                 .task { store.start() }
-                .task { await projects.scan() }
+                .task { await projects.scan(); projects.start() }
                 .task { agents.start() }
         }
         .windowResizability(.contentMinSize)

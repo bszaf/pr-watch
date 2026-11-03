@@ -21,7 +21,8 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                tabContent
+                // Empty states size to their content; without this the footer floats mid-window.
+                tabContent.frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 footer
             }
@@ -255,6 +256,7 @@ struct ProjectsView: View {
 struct ProjectRow: View {
     let project: LocalProject
     @Environment(PRStore.self) private var store
+    @Environment(AgentStore.self) private var agents
 
     private var matchedPR: PullRequest? {
         store.pullRequests.first { $0.repo == project.repo && $0.headBranch == project.branch }
@@ -273,10 +275,39 @@ struct ProjectRow: View {
                             .background(.secondary.opacity(0.15), in: Capsule())
                     }
                 }
-                Text(verbatim: project.repo ?? project.path)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(verbatim: project.repo ?? project.path)
+                    if let last = project.lastCommit {
+                        Text("· last commit \(last, style: .relative) ago")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            if project.changedFiles > 0 {
+                badge("\(project.changedFiles) changed", "pencil.circle.fill", .orange)
+                    .help("\(project.changedFiles) uncommitted file(s)")
+            }
+            if let session = agents.session(inFolder: project.path), session.state != .inactive {
+                AgentStateBadge(state: session.state)
+                    .help("Agent: \(session.displayTitle) — \(session.state.help)")
+            }
+            if matchedPR == nil, project.isActiveWithoutPR(now: Date()) {
+                badge("no open PR", "arrow.triangle.pull", .purple)
+                    .help("Feature branch with recent or uncommitted work and no open PR")
+                Button {
+                    Task {
+                        await AgentHandoff.send(prompt: agentPrompt(for: project),
+                                                session: agents.liveSession(inFolder: project.path),
+                                                path: project.path, settings: store.settings)
+                    }
+                } label: {
+                    Image(systemName: "paperplane")
+                }
+                .buttonStyle(.borderless)
+                .help("Send to agent: \(agentPrompt(for: project))")
+                .linkCursor()
+            }
             if let pr = matchedPR {
                 Button {
                     if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
@@ -305,21 +336,67 @@ struct ProjectRow: View {
             }
         }
     }
+
+    private func badge(_ text: String, _ symbol: String, _ color: Color) -> some View {
+        Label(text, systemImage: symbol)
+            .labelStyle(.titleAndIcon).font(.caption2)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(color.opacity(0.18), in: Capsule())
+            .foregroundStyle(color)
+    }
 }
 
 struct ActivityView: View {
     @Environment(PRStore.self) private var store
+    @Environment(AgentStore.self) private var agents
 
     var body: some View {
-        if store.activity.isEmpty {
-            ContentUnavailableView(
-                "No activity yet", systemImage: "clock.arrow.circlepath",
-                description: Text("CI results, reviews, and merge-conflict changes on your PRs will show up here.")
-            )
-        } else {
-            List(store.activity) { ActivityRow(event: $0) }
-                .listStyle(.inset)
+        VStack(spacing: 0) {
+            ProgressStrip(progress: dailyProgress(activity: store.activity, prs: store.pullRequests,
+                                                  agents: agents.sessions, now: Date()))
+            Divider()
+            if store.activity.isEmpty {
+                ContentUnavailableView(
+                    "No activity yet", systemImage: "clock.arrow.circlepath",
+                    description: Text("CI results, reviews, merges, and merge-conflict changes on your PRs will show up here.")
+                )
+            } else {
+                List(store.activity) { ActivityRow(event: $0) }
+                    .listStyle(.inset)
+            }
         }
+    }
+}
+
+/// Today at a glance: what landed, the state of my open PRs, and the agents.
+struct ProgressStrip: View {
+    let progress: DailyProgress
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text("Today").font(.headline)
+            stat("arrow.triangle.merge", "\(progress.merged) merged", .purple, "My PRs merged today")
+            if progress.closed > 0 { stat("xmark.square", "\(progress.closed) closed", .secondary, "My PRs closed unmerged today") }
+            Divider().frame(height: 14)
+            stat("arrow.triangle.pull", "\(progress.openMine) open", .secondary, "My open PRs")
+            if progress.failingCI > 0 { stat("xmark.circle.fill", "\(progress.failingCI) red CI", .red, "My PRs with failing CI") }
+            stat("eye", "\(progress.inReview) in review", .secondary, "My ready PRs not yet approved")
+            stat("hand.thumbsup.fill", "\(progress.approved) approved", .green, "My approved PRs")
+            if progress.agentsWorking + progress.agentsNeedYou > 0 {
+                Divider().frame(height: 14)
+                stat("gearshape.2.fill", "\(progress.agentsWorking) working", .blue, "Agents running")
+                if progress.agentsNeedYou > 0 {
+                    stat("hand.raised.fill", "\(progress.agentsNeedYou) need you", .orange, "Agents finished or possibly waiting for approval")
+                }
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    private func stat(_ symbol: String, _ text: String, _ color: Color, _ help: String) -> some View {
+        Label(text, systemImage: symbol).foregroundStyle(color).help(help)
     }
 }
 
@@ -353,7 +430,8 @@ struct ActivityRow: View {
         case .ciPassed, .approved: .green
         case .ciFailed: .red
         case .changesRequested, .conflict, .commentAwaitingReply: .orange
-        case .reviewRequested: .secondary
+        case .reviewRequested, .closed: .secondary
+        case .merged: .purple
         }
     }
 }
@@ -376,6 +454,17 @@ struct PRRow: View {
         if pr.relations.contains(.mentioned) { return ("mentioned", .orange) }
         if pr.relations.contains(.watched) { return ("watching", .secondary) }
         return nil
+    }
+
+    private var canHandOff: Bool {
+        agents.liveSession(for: pr) != nil || projects.project(for: pr) != nil
+    }
+
+    private func sendToAgent() {
+        Task {
+            await AgentHandoff.send(prompt: agentPrompt(for: pr), session: agents.liveSession(for: pr),
+                                    path: projects.project(for: pr)?.path, settings: projects.settings)
+        }
     }
 
     var body: some View {
@@ -431,6 +520,14 @@ struct PRRow: View {
                 AgentStateBadge(state: session.state)
                     .help("Agent: \(session.displayTitle) — \(session.state.help)")
             }
+            if pr.isMine, pr.needsAgent, canHandOff {
+                Button(action: sendToAgent) {
+                    Image(systemName: "paperplane.fill")
+                }
+                .buttonStyle(.borderless).foregroundStyle(.orange)
+                .help("Send to agent: \(agentPrompt(for: pr))")
+                .linkCursor()
+            }
             if let project = projects.project(for: pr) {
                 Button {
                     TerminalLauncher.open(path: project.path, settings: projects.settings)
@@ -466,14 +563,25 @@ struct PRRow: View {
 struct PRDetail: View {
     let pr: PullRequest
     @Environment(ProjectStore.self) private var projects
+    @Environment(AgentStore.self) private var agents
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            checks
             reviews
             metadata
             local
         }
         .font(.caption)
+    }
+
+    @ViewBuilder private var checks: some View {
+        ForEach(pr.checks.filter { $0.state.isFailure }, id: \.self) { check in
+            CheckLine(check: check, repo: pr.repo, ignored: pr.ignoredFailures.contains(check))
+        }
+        if !pr.checksComplete {
+            line("ellipsis.circle", "Only the first 100 checks are shown; ignoring needs them all", .secondary)
+        }
     }
 
     @ViewBuilder private var reviews: some View {
@@ -516,6 +624,16 @@ struct PRDetail: View {
                     .linkCursor()
                 Button("Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.path) }
                     .linkCursor()
+                if pr.isMine {
+                    Button("Send to agent") {
+                        Task {
+                            await AgentHandoff.send(prompt: agentPrompt(for: pr), session: agents.liveSession(for: pr),
+                                                    path: project.path, settings: projects.settings)
+                        }
+                    }
+                    .help(agentPrompt(for: pr))
+                    .linkCursor()
+                }
             }
             .buttonStyle(.link)
         }
@@ -548,6 +666,44 @@ struct PRDetail: View {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .abbreviated
         return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// A failing check in the PR detail, with a toggle to ignore it repo-wide.
+struct CheckLine: View {
+    let check: CICheck
+    let repo: String
+    let ignored: Bool
+    @Environment(PRStore.self) private var store
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: ignored ? "eye.slash" : "xmark.octagon.fill")
+                .foregroundStyle(ignored ? Color.secondary : Color.red).frame(width: 14)
+            Text(check.name).fontWeight(ignored ? .regular : .medium)
+                .foregroundStyle(ignored ? .tertiary : .secondary)
+                .strikethrough(ignored)
+            if ignored {
+                Text("ignored").foregroundStyle(.tertiary)
+            } else if let summary = check.summary, !summary.isEmpty {
+                Text(summary).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.tail)
+            }
+            if let url = check.url.flatMap(URL.init(string:)) {
+                Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.forward.square") }
+                    .buttonStyle(.borderless).help("Open the check's details").linkCursor()
+            }
+            Button {
+                store.setCheck(check.name, ignored: !ignored, in: repo)
+            } label: {
+                Image(systemName: ignored ? "eye" : "eye.slash")
+            }
+            .buttonStyle(.borderless).foregroundStyle(.secondary)
+            .help(ignored
+                  ? "Stop ignoring “\(check.name)” in \(repo): its failures turn CI red again."
+                  : "Ignore “\(check.name)” in \(repo): its failures won't turn CI red or send CI notifications on any PR there. Undo here or in Settings → Checks.")
+            .linkCursor()
+        }
+        .help(check.summary ?? check.name)
     }
 }
 
@@ -599,12 +755,14 @@ struct StatusIcons: View {
         }
     }
     private var ciHelp: String {
-        switch pr.ciState {
+        let base = switch pr.ciState {
         case .success: "CI checks passed"
         case .failure, .error: "CI checks failed"
         case .pending, .expected: "CI checks are still running"
         case nil: "No CI checks on this PR"
         }
+        guard !pr.ignoredFailures.isEmpty else { return base }
+        return base + " — ignoring failed " + pr.ignoredFailures.map(\.name).joined(separator: ", ")
     }
 
     private func reviewSymbol(_ d: ReviewDecision) -> String {

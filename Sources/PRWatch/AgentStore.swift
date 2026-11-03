@@ -29,6 +29,21 @@ final class AgentStore {
         Task { await scan() }
     }
 
+    /// A running session (one with a terminal) working on `pr` — where a handoff goes.
+    func liveSession(for pr: PullRequest) -> AgentSession? {
+        sessions.first { $0.tty != nil && $0.works(on: pr) }
+    }
+
+    /// A running session in folder `path` or inside it.
+    func liveSession(inFolder path: String) -> AgentSession? {
+        sessions.first { $0.tty != nil && ($0.cwd == path || $0.cwd.hasPrefix(path + "/")) }
+    }
+
+    /// The most pressing session whose folder is `path` or inside it.
+    func session(inFolder path: String) -> AgentSession? {
+        sessions.first { $0.cwd == path || $0.cwd.hasPrefix(path + "/") }
+    }
+
     /// The most pressing session working on `pr`, if any.
     func session(for pr: PullRequest) -> AgentSession? {
         sessions.first { $0.works(on: pr) }
@@ -58,7 +73,7 @@ final class AgentStore {
         files = scanned
         repoByCwd = repos
 
-        let next = scanned.compactMap { path, file -> AgentSession? in
+        var next = scanned.compactMap { path, file -> AgentSession? in
             let s = file.summary
             guard let cwd = s.cwd, s.phase != nil else { return nil }   // never had a turn
             return AgentSession(
@@ -66,11 +81,14 @@ final class AgentStore {
                 branch: s.branch, repo: repos[cwd] ?? nil, prLinks: s.prLinks,
                 lastActivity: file.modified,
                 state: agentState(phase: s.phase, quietFor: now.timeIntervalSince(file.modified),
-                                  bypassPermissions: s.bypassPermissions),
-                tty: ClaudeProcesses.tty(for: cwd, in: procs))
+                                  bypassPermissions: s.bypassPermissions))
         }
-        .filter { $0.matches(repoFilters: settings.repoFilters) }
-        .sorted { ($0.state, $1.lastActivity) < ($1.state, $0.lastActivity) }
+        let ttys = ClaudeProcesses.ttys(
+            for: next.map { .init(id: $0.id, cwd: $0.cwd, lastActivity: $0.lastActivity) }, procs: procs)
+        for i in next.indices { next[i].tty = ttys[next[i].id] }
+        next = next
+            .filter { $0.matches(repoFilters: settings.repoFilters) }
+            .sorted { ($0.state, $1.lastActivity) < ($1.state, $0.lastActivity) }
 
         if didInitialScan && settings.notifyAgents {
             let previous = Dictionary(sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })

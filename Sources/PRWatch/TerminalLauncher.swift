@@ -21,42 +21,61 @@ enum TerminalApp: String, CaseIterable, Identifiable {
 /// AppleScript (opens a new tab and `cd`s in); this prompts for Automation permission
 /// the first time. Custom runs a shell command template with `{path}` substituted.
 enum TerminalLauncher {
-    static func open(path: String, settings: AppSettings) {
+    /// Open `path`, then run `command` there if given. Returns false when `command` couldn't
+    /// be run: a custom template without a `{command}` placeholder.
+    @discardableResult
+    static func open(path: String, settings: AppSettings, command: String? = nil) -> Bool {
+        let line = "cd " + shellQuote(path) + (command.map { " && " + $0 } ?? "")
         switch TerminalApp(rawValue: settings.terminalApp) ?? .iterm {
         case .iterm:
-            osascript(itermScript(path: path))
+            osascript(itermScript(line: line))
         case .terminal:
-            osascript(terminalScript(path: path))
+            osascript(terminalScript(line: line))
         case .custom:
-            let cmd = settings.customTerminalCommand.replacingOccurrences(of: "{path}", with: shellQuote(path))
-            guard !cmd.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            let template = settings.customTerminalCommand
+            var cmd = template.replacingOccurrences(of: "{path}", with: shellQuote(path))
+            if let command { cmd = cmd.replacingOccurrences(of: "{command}", with: shellQuote(command)) }
+            guard !cmd.trimmingCharacters(in: .whitespaces).isEmpty else { return command == nil }
             shell(cmd)
+            return command == nil || template.contains("{command}")
         }
+        return true
     }
 
     /// Bring the iTerm2/Terminal tab that owns `tty` to the front, else open a new one in `path`.
     @MainActor
     static func focusOrOpen(tty: String?, path: String, settings: AppSettings) async {
-        if let tty {
-            // Only script terminals that are already running — `tell` would launch them.
-            let apps = [("com.googlecode.iterm2", itermFocusScript), ("com.apple.Terminal", terminalFocusScript)]
-                .filter { !NSRunningApplication.runningApplications(withBundleIdentifier: $0.0).isEmpty }
-                .map { $0.1(tty) }
-            let focused = await runBlocking {
-                apps.contains { runCapturing("/usr/bin/osascript", ["-e", $0]) == "ok" }
-            }
-            if focused { return }
-        }
+        if let tty, await focus(tty: tty) { return }
         open(path: path, settings: settings)
     }
 
-    private static func itermFocusScript(tty: String) -> String {
-        """
+    /// Bring the tab owning `tty` to the front, typing `typing` + Return into it first. Typing
+    /// is iTerm2-only (`write text`); Terminal.app has no equivalent for a running program.
+    @MainActor
+    static func focus(tty: String, typing: String? = nil) async -> Bool {
+        // Only script terminals that are already running — `tell` would launch them.
+        var scripts: [String] = []
+        if isRunning("com.googlecode.iterm2") { scripts.append(itermFocusScript(tty: tty, typing: typing)) }
+        if typing == nil, isRunning("com.apple.Terminal") { scripts.append(terminalFocusScript(tty: tty)) }
+        let candidates = scripts
+        return await runBlocking {
+            candidates.contains { runCapturing("/usr/bin/osascript", ["-e", $0]) == "ok" }
+        }
+    }
+
+    private static func isRunning(_ bundleId: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
+    }
+
+    private static func itermFocusScript(tty: String, typing: String?) -> String {
+        let write = typing.map { "tell s to write text \"\(appleEscape($0))\"" } ?? ""
+        return """
         tell application "iTerm"
           repeat with w in windows
             repeat with t in tabs of w
               repeat with s in sessions of t
                 if tty of s is "\(appleEscape(tty))" then
+                  \(write)
                   tell w to select
                   tell t to select
                   tell s to select
@@ -89,8 +108,8 @@ enum TerminalLauncher {
         """
     }
 
-    private static func itermScript(path: String) -> String {
-        let cd = appleEscape("cd " + shellQuote(path))
+    private static func itermScript(line: String) -> String {
+        let cd = appleEscape(line)
         return """
         tell application "iTerm"
           activate
@@ -107,11 +126,11 @@ enum TerminalLauncher {
         """
     }
 
-    private static func terminalScript(path: String) -> String {
+    private static func terminalScript(line: String) -> String {
         """
         tell application "Terminal"
           activate
-          do script "\(appleEscape("cd " + shellQuote(path)))"
+          do script "\(appleEscape(line))"
         end tell
         """
     }
