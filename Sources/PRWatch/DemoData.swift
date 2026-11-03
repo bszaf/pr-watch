@@ -31,13 +31,21 @@ enum DemoData {
     static var projects: [LocalProject] {
         [
             LocalProject(id: "\(home)/projects/app", name: "app",
-                         path: "\(home)/projects/app", branch: altoBranch, repo: app),
+                         path: "\(home)/projects/app", branch: altoBranch, repo: app,
+                         changedFiles: 3, lastCommit: minsAgo(12), defaultBranch: "main"),
+            // Feature branch with work in progress but no PR yet — an agent is on it.
+            LocalProject(id: "\(home)/projects/webapp-sdk", name: "webapp-sdk",
+                         path: "\(home)/projects/webapp-sdk", branch: "octocat/analytics-sdk",
+                         repo: "acme/webapp", changedFiles: 7, lastCommit: hoursAgo(2), defaultBranch: "main"),
             LocalProject(id: "\(home)/projects/webapp", name: "webapp",
                          path: "\(home)/projects/webapp", branch: "main", repo: "acme/webapp"),
             LocalProject(id: "\(home)/projects/infra", name: "infra",
                          path: "\(home)/projects/infra", branch: "release/2.0", repo: "acme/infra"),
         ]
     }
+
+    /// Applied on top of the user's own rules in demo mode, so the ignored-check state renders.
+    static let ignoredChecks: [String: Set<String>] = ["acme/webapp": ["two-approvals"]]
 
     /// Regenerated each read so relative timestamps ("updated 5m ago") stay fresh.
     static var pullRequests: [PullRequest] { curated }
@@ -53,7 +61,7 @@ enum DemoData {
             agent("demo-idle", "Fix GitLab token refresh review comments", "app-token-refresh",
                   branch: "octocat/gitlab-token", repo: app, state: .idle, minsAgo: 4,
                   links: [PRLink(repo: app, number: 1479, url: "https://github.com/\(app)/pull/1479")]),
-            agent("demo-working", "Migrate analytics to the new SDK", "webapp",
+            agent("demo-working", "Migrate analytics to the new SDK", "webapp-sdk",
                   branch: "octocat/analytics-sdk", repo: "acme/webapp", state: .working, minsAgo: 0),
             agent("demo-inactive", nil, "infra", branch: "release/2.0", repo: "acme/infra",
                   state: .inactive, minsAgo: 95),
@@ -88,7 +96,14 @@ enum DemoData {
                ci: .failure, decision: .changesRequested, changeRequesters: ["carol"],
                relations: [.authored],
                additions: 88, deletions: 120, labels: ["bug"], comments: 12, updated: minsAgo(41),
-               unresolvedThreads: 3, awaitingMyReply: 2),
+               unresolvedThreads: 3, awaitingMyReply: 2,
+               checks: [
+                   CICheck(name: "test (ubuntu-latest)", state: .failure, summary: "3 tests failed",
+                           url: "https://github.com/\(app)/actions"),
+                   CICheck(name: "two-approvals", state: .failure, summary: "Needs approvals from 2 engineers.",
+                           url: "https://github.com/\(app)/actions"),
+                   CICheck(name: "build", state: .success),
+               ], checksComplete: false),
 
             // CI still pending + review required + pending reviewers; a Draft PR.
             pr(.github, app, 1483, "WIP: notification grouping",
@@ -141,9 +156,14 @@ enum DemoData {
             // I was @-mentioned ("mentioned"): approved + green.
             pr(.github, "acme/webapp", 91, "Migrate analytics to new SDK",
                author: "judy", head: "judy/analytics-sdk", base: "develop",
-               ci: .success, decision: .approved, approvers: ["mallory"],
+               ci: .failure, decision: .approved, approvers: ["mallory"],
                relations: [.mentioned],
-               additions: 120, deletions: 90, labels: ["analytics"], comments: 4, updated: hoursAgo(1)),
+               additions: 120, deletions: 90, labels: ["analytics"], comments: 4, updated: hoursAgo(1),
+               // Red only because of `two-approvals`, which `ignoredChecks` discounts → green.
+               checks: [
+                   CICheck(name: "two-approvals", state: .failure, summary: "Needs approvals from 2 engineers."),
+                   CICheck(name: "build", state: .success),
+               ]),
 
             // Individually watched ("watching"): CI failed.
             pr(.gitlab, "acme/infra", 44, "Investigate flaky deploy job",
@@ -158,6 +178,7 @@ enum DemoData {
 
     private static var activityFeed: [ActivityEvent] {
         [
+            ev(minsAgo(3), .github, app, 1476, "Cache viewer login across polls", .merged, mine: true),
             ev(minsAgo(6), .github, app, 1481, "Add adaptive polling cadence for in-flight CI", .ciPassed),
             ev(minsAgo(20), .github, "acme/webapp", 91, "Migrate analytics to new SDK", .approved),
             ev(minsAgo(35), .github, app, 1479, "Refactor GitLab token refresh", .commentAwaitingReply),
@@ -165,6 +186,7 @@ enum DemoData {
             ev(minsAgo(50), .github, app, 1479, "Refactor GitLab token refresh", .changesRequested),
             ev(hoursAgo(1), .github, "acme/webapp", 88, "Introduce feature flags service", .reviewRequested),
             ev(hoursAgo(2), .gitlab, "acme/webapp", 302, "Bump image pipeline to node 20", .conflict),
+            ev(hoursAgo(3), .github, app, 1470, "Spike: polling via webhooks", .closed, mine: true),
         ]
     }
 
@@ -177,10 +199,11 @@ enum DemoData {
         approvers: [String] = [], changeRequesters: [String] = [], pendingReviewers: [String] = [],
         mergeable: Mergeable = .mergeable, relations: Set<PRRelation>,
         additions: Int, deletions: Int, labels: [String], comments: Int, updated: String,
-        commentedReviewers: [String] = [], unresolvedThreads: Int = 0, awaitingMyReply: Int = 0
+        commentedReviewers: [String] = [], unresolvedThreads: Int = 0, awaitingMyReply: Int = 0,
+        checks: [CICheck] = [], checksComplete: Bool = true
     ) -> PullRequest {
         let prefix = provider == .gitlab ? "!" : "#"
-        return PullRequest(
+        var pr = PullRequest(
             id: "\(provider.rawValue):\(repo)\(prefix)\(number)",
             provider: provider, number: number, title: title,
             url: demoURL(provider, repo, number),
@@ -192,16 +215,19 @@ enum DemoData {
             labels: labels, comments: comments, updatedAt: updated,
             commentedReviewers: commentedReviewers, unresolvedThreads: unresolvedThreads,
             awaitingMyReply: awaitingMyReply, relations: relations)
+        pr.checks = checks
+        pr.checksComplete = checksComplete
+        return pr
     }
 
     private static func ev(
         _ date: Date, _ provider: Provider, _ repo: String, _ number: Int,
-        _ title: String, _ kind: ActivityKind
+        _ title: String, _ kind: ActivityKind, mine: Bool? = nil
     ) -> ActivityEvent {
         let ref = provider == .gitlab ? "!\(number)" : "#\(number)"
         return ActivityEvent(
             date: date, prId: "\(provider.rawValue):\(repo)\(ref)", repo: repo,
-            number: number, ref: ref, title: title, url: demoURL(provider, repo, number), kind: kind)
+            number: number, ref: ref, title: title, url: demoURL(provider, repo, number), kind: kind, mine: mine)
     }
 
     private static func demoURL(_ provider: Provider, _ repo: String, _ number: Int) -> String {

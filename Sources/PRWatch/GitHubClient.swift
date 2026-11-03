@@ -108,7 +108,12 @@ struct GitHubClient {
     /// `updatedAt` moved, or that still have open threads (a resolution may not bump
     /// `updatedAt`, so we re-check those to detect it clearing). Everything else reuses the
     /// per-PR `cache`, keeping typical polls far under the GraphQL rate budget.
-    func fetch(cache: [String: CachedReview]) async throws -> ProviderResult {
+    /// `known` = GitHub PR ids seen open last time; any now missing are checked for merged/closed
+    /// in the same phase-B request.
+    /// Failing PRs also get their check list in phase B, re-fetched only when `checksCache`'s key
+    /// (head commit + per-state check counts) moved.
+    func fetch(cache: [String: CachedReview], checksCache: [String: CachedChecks] = [:],
+               known: Set<String> = []) async throws -> ProviderResult {
         guard let qA = queryPhaseA() else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
         // No token isn't an error — GitHub is just "not configured" (matches GitLab).
         guard var resolved = await runBlocking({ Self.resolveToken() }) else { return ProviderResult(prs: [], viewerLogin: nil, source: .none) }
@@ -166,10 +171,19 @@ struct GitHubClient {
             if changed || hasOpenThreads { stale.append(node); staleSet.insert(id) }
         }
 
-        // Phase B: targeted thread/review fetch for the stale set only.
+        let vanished = known.subtracting(order).sorted()
+        let needChecks = order.compactMap { id -> GraphQLResponse.Node? in
+            guard let node = nodeById[id], node.rollupState?.isFailure == true,
+                  let key = node.checksKey, checksCache[id]?.key != key else { return nil }
+            return node
+        }
+
+        // Phase B: targeted thread/review fetch for the stale set only, plus vanished PRs' final state.
         var fresh: [String: ReviewInfo] = [:]
+        var finals: [String: PRFinalState]?
         var remLast = remA, resetLast = resetA
-        if let qB = queryPhaseB(stale) {
+        var freshChecks: [String: CachedChecks] = [:]
+        if let qB = queryPhaseB(stale, vanished: vanished, checks: needChecks) {
             do {
                 let (dataB, remB, resetB) = try await post(qB, token: resolved.token)
                 if remB != nil { remLast = remB }
@@ -178,6 +192,21 @@ struct GitHubClient {
                 for (i, node) in stale.enumerated() {
                     guard let id = node.ghId, let n = dec.data?.byAlias["p\(i)"] else { continue }
                     fresh[id] = n.reviewInfo(viewer: viewer)
+                }
+                var got: [String: PRFinalState] = [:]
+                for (i, id) in vanished.enumerated() {
+                    guard let n = dec.data?.byAlias["v\(i)"], let state = n.state,
+                          let title = n.title, let url = n.url else { continue }
+                    got[id] = PRFinalState(state: state, mergedAt: n.mergedAt, closedAt: n.closedAt,
+                                           title: title, url: url, author: n.author?.login)
+                }
+                finals = got
+                for (i, node) in needChecks.enumerated() {
+                    guard let id = node.ghId, let key = node.checksKey,
+                          let contexts = dec.data?.byAlias["k\(i)"]?.commits?.nodes.first?.commit.statusCheckRollup?.contexts
+                    else { continue }
+                    freshChecks[id] = CachedChecks(key: key, checks: Self.checks(from: contexts.nodes ?? []),
+                                                   complete: contexts.pageInfo?.hasNextPage != true)
                 }
             } catch {
                 // Phase B failed (rate limit / network): keep phase-A data, fall back to
@@ -188,6 +217,7 @@ struct GitHubClient {
         // Assemble PRs (fresh info for stale, cached info otherwise) and rebuild the cache.
         var prs: [PullRequest] = []
         var newCache: [String: CachedReview] = [:]
+        var newChecks: [String: CachedChecks] = [:]
         for id in order {
             guard let node = nodeById[id] else { continue }
             let isStale = staleSet.contains(id)
@@ -196,15 +226,42 @@ struct GitHubClient {
                 : (cache[id]?.info ?? ReviewInfo())
             guard var pr = node.toPullRequest(info: info) else { continue }
             pr.relations = relationsById[id] ?? []
+            if let c = freshChecks[id] ?? checksCache[id] {
+                newChecks[id] = c
+                if c.key == node.checksKey { pr.checks = c.checks; pr.checksComplete = c.complete }
+            }
             prs.append(pr)
             newCache[id] = CachedReview(
                 updatedAt: Self.cacheStamp(nodeUpdatedAt: node.updatedAt, wasStale: isStale,
                                            gotFresh: fresh[id] != nil, previous: cache[id]?.updatedAt),
                 info: info)
         }
+        let (closed, unresolved) = Self.resolveVanished(vanished, finals: finals)
         return ProviderResult(prs: prs, viewerLogin: viewer, source: resolved.source,
                               rateLimitRemaining: remLast, rateLimitResetAt: resetLast,
-                              threadCache: newCache)
+                              threadCache: newCache, checksCache: newChecks, closed: closed, unresolvedVanished: unresolved)
+    }
+
+    /// Split vanished ids by their fetched final state. `finals == nil` (phase B failed) leaves
+    /// all of them unresolved for a retry; a PR still OPEN only left the watched set (filter,
+    /// review un-requested) and an id with no data (deleted / no access) is dropped.
+    static func resolveVanished(_ ids: [String], finals: [String: PRFinalState]?) -> (closed: [ClosedPR], unresolved: Set<String>) {
+        guard let finals else { return ([], Set(ids)) }
+        let closed = ids.compactMap { id -> ClosedPR? in
+            guard let f = finals[id], f.state != "OPEN", let ref = parseId(id) else { return nil }
+            let merged = f.state == "MERGED"
+            let date = (merged ? f.mergedAt : f.closedAt).flatMap(parseISODate) ?? Date()
+            return ClosedPR(id: id, repo: ref.repo, number: ref.number, title: f.title, url: f.url,
+                            author: f.author ?? "", merged: merged, date: date)
+        }
+        return (closed, [])
+    }
+
+    /// "github:owner/repo#12" → ("owner/repo", 12).
+    static func parseId(_ id: String) -> (repo: String, number: Int)? {
+        guard id.hasPrefix("github:"), let hash = id.lastIndex(of: "#"),
+              let n = Int(id[id.index(after: hash)...]) else { return nil }
+        return (String(id[id.index(id.startIndex, offsetBy: 7)..<hash]), n)
     }
 
     /// The `updatedAt` to store in the review cache. A stale PR whose fresh fetch failed
@@ -266,8 +323,10 @@ struct GitHubClient {
         return "query { viewer { login } \(blocks.joined(separator: " ")) }"
     }
 
-    /// Phase B: reviews + threads for just the stale PRs, one aliased block each.
-    private func queryPhaseB(_ stale: [GraphQLResponse.Node]) -> String? {
+    /// Phase B: reviews + threads for just the stale PRs, one aliased block each, plus the final
+    /// state of vanished PRs.
+    private func queryPhaseB(_ stale: [GraphQLResponse.Node], vanished: [String],
+                             checks: [GraphQLResponse.Node]) -> String? {
         var blocks: [String] = []
         for (i, node) in stale.enumerated() {
             guard let number = node.number,
@@ -275,6 +334,19 @@ struct GitHubClient {
             let parts = repo.split(separator: "/", maxSplits: 1)
             guard parts.count == 2 else { continue }
             blocks.append("p\(i): repository(owner: \"\(parts[0])\", name: \"\(parts[1])\") { pullRequest(number: \(number)) { \(Self.threadFields) } }")
+        }
+        for (i, id) in vanished.enumerated() {
+            guard let ref = Self.parseId(id) else { continue }
+            let parts = ref.repo.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2, let owner = Self.safeName(String(parts[0])),
+                  let name = Self.safeName(String(parts[1])) else { continue }
+            blocks.append("v\(i): repository(owner: \"\(owner)\", name: \"\(name)\") { pullRequest(number: \(ref.number)) { state mergedAt closedAt title url author { login } } }")
+        }
+        for (i, node) in checks.enumerated() {
+            guard let number = node.number, let repo = node.repository?.nameWithOwner else { continue }
+            let parts = repo.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            blocks.append("k\(i): repository(owner: \"\(parts[0])\", name: \"\(parts[1])\") { pullRequest(number: \(number)) { \(Self.checkFields) } }")
         }
         guard !blocks.isEmpty else { return nil }
         return "query { \(blocks.joined(separator: " ")) }"
@@ -305,8 +377,42 @@ struct GitHubClient {
     labels(first: 10) { nodes { name } }
     comments { totalCount }
     mergeable
-    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 0) { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }
     """
+
+    /// Phase B, failing PRs only: every check of the head commit. Busy repos run 50–70 checks.
+    private static let checkFields = """
+    commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion detailsUrl title } ... on StatusContext { context state description targetUrl } } } } } } }
+    """
+
+    /// Head commit + non-zero per-state counts of check runs and commit statuses.
+    static func checksKey(oid: String, runs: [(String, Int)], statuses: [(String, Int)]) -> String {
+        let counts = runs.filter { $0.1 > 0 }.map { "run.\($0.0)=\($0.1)" }
+            + statuses.filter { $0.1 > 0 }.map { "status.\($0.0)=\($0.1)" }
+        return ([oid] + counts).joined(separator: " ")
+    }
+
+    /// Check runs settle as `status` COMPLETED + a `conclusion`; commit statuses carry a `state`.
+    static func checks(from contexts: [GitHubCheckContext]) -> [CICheck] {
+        contexts.compactMap { c in
+            if c.typename == "StatusContext" {
+                guard let name = c.context else { return nil }
+                let state: CheckState = switch c.state {
+                case "SUCCESS": .success
+                case "FAILURE", "ERROR": .failure
+                default: .pending
+                }
+                return CICheck(name: name, state: state, summary: c.description, url: c.targetUrl)
+            }
+            guard let name = c.name else { return nil }
+            let state: CheckState = switch (c.status, c.conclusion) {
+            case ("COMPLETED", "SUCCESS"), ("COMPLETED", "NEUTRAL"), ("COMPLETED", "SKIPPED"), ("COMPLETED", nil): .success
+            case ("COMPLETED", _): .failure
+            default: .pending
+            }
+            return CICheck(name: name, state: state, summary: c.title, url: c.detailsUrl)
+        }
+    }
 
     /// Phase B — the expensive nested connections, fetched only for stale PRs. The
     /// `first:` caps silently truncate very busy PRs (>8 open threads undercount).
@@ -320,6 +426,18 @@ struct GitHubClient {
 }
 
 // MARK: - GraphQL decoding
+
+/// A `statusCheckRollup` context: a `CheckRun` (name/status/conclusion) or a `StatusContext`
+/// (context/state).
+struct GitHubCheckContext: Decodable {
+    var typename: String?
+    var name: String?, status: String?, conclusion: String?, detailsUrl: String?, title: String?
+    var context: String?, state: String?, description: String?, targetUrl: String?
+    enum CodingKeys: String, CodingKey {
+        case typename = "__typename", name, status, conclusion, detailsUrl, title
+        case context, state, description, targetUrl
+    }
+}
 
 private struct GraphQLResponse: Decodable {
     let data: DataBlock?
@@ -387,6 +505,9 @@ private struct GraphQLResponse: Decodable {
         let comments: Count?
         let mergeable: Mergeable?
         let commits: Commits?
+        let state: String?
+        let mergedAt: String?
+        let closedAt: String?
 
         struct Author: Decodable {
             let login: String?
@@ -425,10 +546,32 @@ private struct GraphQLResponse: Decodable {
             struct CommitNode: Decodable {
                 let commit: Commit
                 struct Commit: Decodable {
+                    let oid: String?
                     let statusCheckRollup: Rollup?
-                    struct Rollup: Decodable { let state: CheckState? }
+                    struct Rollup: Decodable { let state: CheckState?; let contexts: Contexts? }
                 }
             }
+        }
+
+        struct Contexts: Decodable {
+            let pageInfo: PageInfo?
+            let nodes: [GitHubCheckContext]?
+            let checkRunCountsByState: [StateCount]?
+            let statusContextCountsByState: [StateCount]?
+            struct PageInfo: Decodable { let hasNextPage: Bool }
+            struct StateCount: Decodable { let state: String; let count: Int }
+        }
+
+        var rollupState: CheckState? { commits?.nodes.first?.commit.statusCheckRollup?.state }
+
+        /// Changes whenever any check of the head commit changes state — the cue to re-fetch them.
+        var checksKey: String? {
+            guard let commit = commits?.nodes.first?.commit, let oid = commit.oid else { return nil }
+            let c = commit.statusCheckRollup?.contexts
+            return GitHubClient.checksKey(
+                oid: oid,
+                runs: (c?.checkRunCountsByState ?? []).map { ($0.state, $0.count) },
+                statuses: (c?.statusContextCountsByState ?? []).map { ($0.state, $0.count) })
         }
 
         /// Stable id from the light fields alone (available in both fetch phases).
@@ -475,7 +618,7 @@ private struct GraphQLResponse: Decodable {
                 headBranch: headRefName,
                 reviewDecision: reviewDecision,
                 mergeable: mergeable ?? .unknown,
-                ciState: commits?.nodes.first?.commit.statusCheckRollup?.state,
+                ciState: rollupState,
                 approvers: info.approvers,
                 changeRequesters: info.changeRequesters,
                 pendingReviewers: (reviewRequests?.nodes ?? []).compactMap { $0.requestedReviewer?.login ?? $0.requestedReviewer?.slug },

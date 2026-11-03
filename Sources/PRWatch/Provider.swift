@@ -62,6 +62,13 @@ struct CachedReview: Sendable {
     var info: ReviewInfo
 }
 
+/// A failing PR's check list, valid while its `key` (head commit + per-state counts) holds.
+struct CachedChecks: Sendable, Equatable {
+    let key: String
+    let checks: [CICheck]
+    let complete: Bool
+}
+
 struct ProviderResult: Sendable {
     let prs: [PullRequest]
     let viewerLogin: String?
@@ -69,4 +76,29 @@ struct ProviderResult: Sendable {
     var rateLimitRemaining: Int? = nil
     var rateLimitResetAt: Date? = nil
     var threadCache: [String: CachedReview]? = nil   // GitHub: updated per-PR review cache
+    var checksCache: [String: CachedChecks]? = nil    // GitHub: per-PR check lists of failing PRs
+    var closed: [ClosedPR] = []                       // previously seen PRs now merged/closed
+    var unresolvedVanished: Set<String> = []          // vanished ids whose final state is unknown yet
+}
+
+/// A previously watched PR that left the open set because it was merged or closed.
+struct ClosedPR: Sendable, Equatable {
+    let id: String
+    let repo: String
+    let number: Int
+    let title: String
+    let url: String
+    let author: String
+    let merged: Bool
+    let date: Date
+}
+
+/// Final-state fields fetched for a PR that vanished from the open set.
+struct PRFinalState: Sendable, Equatable {
+    let state: String      // OPEN / MERGED / CLOSED
+    let mergedAt: String?
+    let closedAt: String?
+    let title: String
+    let url: String
+    let author: String?
 }

@@ -45,7 +45,7 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     let headBranch: String?   // head/source branch — used to match a local worktree
     let reviewDecision: ReviewDecision?
     let mergeable: Mergeable
-    let ciState: CheckState?
+    var ciState: CheckState?
     let approvers: [String]          // logins who approved
     let changeRequesters: [String]   // logins who requested changes
     let pendingReviewers: [String]   // requested but not yet reviewed
@@ -59,6 +59,10 @@ struct PullRequest: Identifiable, Sendable, Equatable {
     var unresolvedThreads: Int = 0          // open review conversations
     var awaitingMyReply: Int = 0            // unresolved & last comment isn't mine (or a bot)
     var relations: Set<PRRelation> = []
+    /// Individual checks of the head commit; fetched only while CI is failing (GitHub).
+    var checks: [CICheck] = []
+    var checksComplete = true               // false when the list was cut off at the fetch cap
+    var ignoredFailures: [CICheck] = []     // failing checks discounted from `ciState` by settings
 
     var isMine: Bool { relations.contains(.authored) }
     var isReview: Bool { relations.contains(.reviewDirect) || relations.contains(.reviewTeam) }
@@ -72,6 +76,28 @@ struct PullRequest: Identifiable, Sendable, Equatable {
         if ciState == .success && reviewDecision == .approved { return "✅" }
         if ciState == nil || ciState == .pending || ciState == .expected { return "🟡" }
         return "✅"
+    }
+}
+
+/// One CI check (a check run or a commit status) of a PR's head commit.
+struct CICheck: Sendable, Equatable, Hashable {
+    let name: String
+    let state: CheckState      // only .success / .failure / .pending
+    var summary: String? = nil
+    var url: String? = nil
+}
+
+extension PullRequest {
+    /// This PR with `ignored` check names' failures discounted from `ciState`. Without the full
+    /// check list (not fetched, or cut off) the reported state stands.
+    func applyingIgnoredChecks(_ ignored: Set<String>) -> PullRequest {
+        var pr = self
+        let failing = checks.filter { $0.state.isFailure }
+        pr.ignoredFailures = failing.filter { ignored.contains($0.name) }
+        guard ciState?.isFailure == true, checksComplete, !pr.ignoredFailures.isEmpty,
+              pr.ignoredFailures.count == failing.count else { return pr }
+        pr.ciState = checks.contains { $0.state == .pending && !ignored.contains($0.name) } ? .pending : .success
+        return pr
     }
 }
 

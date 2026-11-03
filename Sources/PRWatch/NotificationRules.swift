@@ -1,11 +1,24 @@
 import Foundation
 
+/// `snapshot` with each known PR's CI state replaced by its current one, leaving the rest:
+/// what a rules change does, so it isn't later reported as a CI transition.
+func adoptingCIStates(_ prs: [PullRequest], into snapshot: [String: SnapshotState]) -> [String: SnapshotState] {
+    var out = snapshot
+    for pr in prs {
+        guard let old = snapshot[pr.id] else { continue }
+        out[pr.id] = SnapshotState(ciState: pr.ciState, reviewDecision: old.reviewDecision,
+                                   mergeable: old.mergeable, awaitingReply: old.awaitingReply)
+    }
+    return out
+}
+
 /// Which triggers are enabled — mirrors the AppSettings toggles.
 struct Triggers: Sendable {
     var ci: Bool
     var review: Bool
     var conflicts: Bool
     var comments: Bool
+    var merged: Bool
 }
 
 struct PendingNotification: Equatable, Sendable {
@@ -44,9 +57,13 @@ func transitions(for pr: PullRequest, previous: SnapshotState?) -> [ActivityKind
 /// The snapshot to diff the next poll against. Entries of providers whose fetch failed are
 /// carried over: a failed cold-start poll returns no PRs, and dropping their entries would
 /// turn every change made while the app was off into a silent first sighting.
+/// `retained` ids (vanished PRs whose merged/closed state couldn't be fetched) stay too, so
+/// the next poll checks them again.
 func nextSnapshot(_ prs: [PullRequest], previous: [String: SnapshotState],
-                  keeping failed: Set<Provider>) -> [String: SnapshotState] {
-    var out = previous.filter { id, _ in failed.contains { id.hasPrefix("\($0.rawValue):") } }
+                  keeping failed: Set<Provider>, retaining retained: Set<String> = []) -> [String: SnapshotState] {
+    var out = previous.filter { id, _ in
+        retained.contains(id) || failed.contains { id.hasPrefix("\($0.rawValue):") }
+    }
     for pr in prs {
         out[pr.id] = SnapshotState(
             ciState: pr.ciState, reviewDecision: pr.reviewDecision,
@@ -62,7 +79,7 @@ func eventDate(for kind: ActivityKind, updatedAt: String?, now: Date) -> Date {
     switch kind {
     case .ciPassed, .ciFailed, .conflict:
         return now
-    case .approved, .changesRequested, .reviewRequested, .commentAwaitingReply:
+    case .approved, .changesRequested, .reviewRequested, .commentAwaitingReply, .merged, .closed:
         return updatedAt.flatMap(parseISODate) ?? now
     }
 }
@@ -73,6 +90,7 @@ func isEnabled(_ kind: ActivityKind, _ triggers: Triggers) -> Bool {
     case .approved, .changesRequested, .reviewRequested: triggers.review
     case .conflict: triggers.conflicts
     case .commentAwaitingReply: triggers.comments
+    case .merged, .closed: triggers.merged
     }
 }
 
@@ -87,9 +105,17 @@ func notification(for kind: ActivityKind, pr: PullRequest) -> PendingNotificatio
     case .reviewRequested: title = "👀 Review requested — \(tag)"
     case .conflict: title = "⚠️ Merge conflict — \(tag)"
     case .commentAwaitingReply: title = "💬 Comment awaiting your reply — \(tag)"
+    case .merged: title = "🎉 Merged — \(tag)"
+    case .closed: title = "🚫 Closed — \(tag)"
     }
     let body = pr.author.isEmpty ? pr.title : "@\(pr.author) · \(pr.title)"
     return PendingNotification(title: title, body: body)
+}
+
+/// Banner for one of my PRs leaving the open set.
+func closedNotification(_ c: ClosedPR) -> PendingNotification {
+    let tag = "\(shortRepo(c.repo)) #\(c.number)"
+    return PendingNotification(title: c.merged ? "🎉 Merged — \(tag)" : "🚫 Closed — \(tag)", body: c.title)
 }
 
 /// Convenience used by tests and banner-only callers: enabled transitions as banners.

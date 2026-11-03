@@ -263,9 +263,14 @@ enum TranscriptScanner {
 
 // MARK: - Running `claude` processes
 
-/// Maps sessions to the terminal running them, via each `claude` CLI process's tty and cwd.
+/// Maps sessions to the terminal running them, via each `claude` CLI process's tty and the
+/// `~/.claude/sessions/<pid>.json` file it keeps with its current session id.
 enum ClaudeProcesses {
-    struct Proc: Equatable, Sendable { let pid: Int; let tty: String; var cwd: String? = nil }
+    struct Proc: Equatable, Sendable {
+        let pid: Int; let tty: String; var cwd: String? = nil; var sessionId: String? = nil
+    }
+
+    static var defaultSessionsDir: String { NSHomeDirectory() + "/.claude/sessions" }
 
     /// `ps -axo pid=,tty=,comm=` → `claude` processes attached to a terminal.
     static func parsePS(_ out: String) -> [Proc] {
@@ -288,15 +293,42 @@ enum ClaudeProcesses {
         return result
     }
 
-    /// The tty of the process whose cwd is `cwd`, else of the deepest one containing it.
-    static func tty(for cwd: String, in procs: [Proc]) -> String? {
-        if let exact = procs.first(where: { $0.cwd == cwd }) { return exact.tty }
-        return procs
-            .filter { p in p.cwd.map { cwd.hasPrefix($0 + "/") } ?? false }
-            .max { ($0.cwd?.count ?? 0) < ($1.cwd?.count ?? 0) }?.tty
+    private struct SessionFile: Decodable { let pid: Int; let sessionId: String }
+
+    /// pid → session id from the `<pid>.json` files in `dir`.
+    static func sessionIds(in dir: String) -> [Int: String] {
+        let fm = FileManager.default
+        var out: [Int: String] = [:]
+        for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where name.hasSuffix(".json") {
+            guard let data = fm.contents(atPath: dir + "/" + name),
+                  let f = try? JSONDecoder().decode(SessionFile.self, from: data) else { continue }
+            out[f.pid] = f.sessionId
+        }
+        return out
     }
 
-    static func running() -> [Proc] {
+    struct Candidate: Sendable { let id: String; let cwd: String; let lastActivity: Date }
+
+    /// Session id → tty. A process naming its session claims it exactly. A process without a
+    /// session file goes to the most recently active unclaimed session in its folder (exact
+    /// cwd first, else the deepest containing one), so an older session there never gets it.
+    static func ttys(for sessions: [Candidate], procs: [Proc]) -> [String: String] {
+        var out: [String: String] = [:]
+        for p in procs { if let id = p.sessionId { out[id] = p.tty } }
+        let claimed = Set(out.keys)
+        var free = sessions.filter { !claimed.contains($0.id) }.sorted { $0.lastActivity > $1.lastActivity }
+        let unnamed = procs.filter { $0.sessionId == nil }.sorted { ($0.cwd?.count ?? 0) > ($1.cwd?.count ?? 0) }
+        for p in unnamed {
+            guard let cwd = p.cwd else { continue }
+            let pick = free.firstIndex { $0.cwd == cwd }
+                ?? free.indices.filter { free[$0].cwd.hasPrefix(cwd + "/") }
+                    .min { free[$0].cwd.count > free[$1].cwd.count }
+            if let i = pick { out[free[i].id] = p.tty; free.remove(at: i) }
+        }
+        return out
+    }
+
+    static func running(sessionsDir: String = defaultSessionsDir) -> [Proc] {
         guard let ps = runCapturing("/bin/ps", ["-axo", "pid=,tty=,comm="]) else { return [] }
         var procs = parsePS(ps)
         guard !procs.isEmpty else { return [] }
@@ -304,7 +336,11 @@ enum ClaudeProcesses {
         let cwds = runCapturing("/usr/sbin/lsof", ["-a", "-d", "cwd", "-Fpn", "-p",
                                                    procs.map { String($0.pid) }.joined(separator: ",")],
                                 requireSuccess: false).map(parseLsof) ?? [:]
-        for i in procs.indices { procs[i].cwd = cwds[procs[i].pid] }
+        let ids = sessionIds(in: sessionsDir)
+        for i in procs.indices {
+            procs[i].cwd = cwds[procs[i].pid]
+            procs[i].sessionId = ids[procs[i].pid]
+        }
         return procs
     }
 }

@@ -175,15 +175,45 @@ private func pr(_ repo: String, _ number: Int, head: String?, provider: Provider
                 == [86702: "/w/app", 97655: "/w/app2"])
     }
 
-    @Test func picksExactCwdThenDeepestContainingDirectory() {
+    private typealias C = ClaudeProcesses.Candidate
+    private func at(_ minsAgo: Double) -> Date { Date(timeIntervalSince1970: 1_000_000 - minsAgo * 60) }
+
+    @Test func sessionFilesMapEachProcessToItsOwnSessionInASharedFolder() {
+        let sessions = [C(id: "a", cwd: "/w/app", lastActivity: at(1)),
+                        C(id: "b", cwd: "/w/app", lastActivity: at(2)),
+                        C(id: "old", cwd: "/w/app", lastActivity: at(0))]
         let procs: [ClaudeProcesses.Proc] = [
-            .init(pid: 1, tty: "/dev/ttys001", cwd: "/w"),
-            .init(pid: 2, tty: "/dev/ttys002", cwd: "/w/app"),
-            .init(pid: 3, tty: "/dev/ttys003", cwd: "/w/app2"),
+            .init(pid: 1, tty: "/dev/ttys001", cwd: "/w/app", sessionId: "b"),
+            .init(pid: 2, tty: "/dev/ttys002", cwd: "/w/app", sessionId: "a"),
         ]
-        #expect(ClaudeProcesses.tty(for: "/w/app2", in: procs) == "/dev/ttys003")
-        #expect(ClaudeProcesses.tty(for: "/w/app/sub", in: procs) == "/dev/ttys002")
-        #expect(ClaudeProcesses.tty(for: "/elsewhere", in: procs) == nil)
+        #expect(ClaudeProcesses.ttys(for: sessions, procs: procs) == ["a": "/dev/ttys002", "b": "/dev/ttys001"])
+    }
+
+    @Test func aProcessWithoutASessionFileTakesTheNewestUnclaimedSessionInItsFolder() {
+        let sessions = [C(id: "claimed", cwd: "/w/app", lastActivity: at(0)),
+                        C(id: "newer", cwd: "/w/app", lastActivity: at(1)),
+                        C(id: "older", cwd: "/w/app", lastActivity: at(5)),
+                        C(id: "sub", cwd: "/w/lib/sub", lastActivity: at(1))]
+        let procs: [ClaudeProcesses.Proc] = [
+            .init(pid: 1, tty: "/dev/ttys001", cwd: "/w/app", sessionId: "claimed"),
+            .init(pid: 2, tty: "/dev/ttys002", cwd: "/w/app"),
+            .init(pid: 3, tty: "/dev/ttys003", cwd: "/w"),
+            .init(pid: 4, tty: "/dev/ttys004", cwd: "/w/lib"),
+            .init(pid: 5, tty: "/dev/ttys005", cwd: "/elsewhere"),
+        ]
+        #expect(ClaudeProcesses.ttys(for: sessions, procs: procs) == [
+            "claimed": "/dev/ttys001", "newer": "/dev/ttys002", "older": "/dev/ttys003", "sub": "/dev/ttys004",
+        ])
+    }
+
+    @Test func readsSessionIdsFromPidFilesSkippingOthers() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PRWatchSessions-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try #"{"pid":42,"sessionId":"s-42","cwd":"/w","status":"idle"}"#.write(toFile: dir + "/42.json", atomically: true, encoding: .utf8)
+        try "not json".write(toFile: dir + "/43.json", atomically: true, encoding: .utf8)
+        try "k".write(toFile: dir + "/42.abc.key", atomically: true, encoding: .utf8)
+        #expect(ClaudeProcesses.sessionIds(in: dir) == [42: "s-42"])
     }
 }
 

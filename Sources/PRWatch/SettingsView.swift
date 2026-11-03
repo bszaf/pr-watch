@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("Projects", systemImage: "folder") }
             NotificationSettings()
                 .tabItem { Label("Notifications", systemImage: "bell") }
+            ChecksSettings()
+                .tabItem { Label("Checks", systemImage: "checklist") }
         }
         // Fixed size so the window doesn't resize when switching tabs.
         .frame(width: 480, height: 560)
@@ -265,7 +267,7 @@ private struct ProjectsSettings: View {
                 if settings.terminalApp == TerminalApp.custom.rawValue {
                     TextField("Command ({path} = project path)", text: $settings.customTerminalCommand)
                         .textFieldStyle(.roundedBorder)
-                    Text("Example: open -a Ghostty {path}")
+                    Text("Example: open -a Ghostty {path}. Add {command} to also run a command there (used by Send to agent).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("Opening iTerm2/Terminal may prompt for Automation permission the first time.")
@@ -275,6 +277,10 @@ private struct ProjectsSettings: View {
                 Toggle("Track Claude Code sessions", isOn: $settings.watchAgents)
                     .onChange(of: settings.watchAgents) { Task { await agents.scan() } }
                 Text("Reads session transcripts in ~/.claude/projects (read-only — nothing is installed) and shows them in the Agents tab and on matching PRs.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Agent command", text: $settings.agentCommand)
+                    .textFieldStyle(.roundedBorder)
+                Text("Starts a new agent for \u{201C}Send to agent\u{201D} when no session is running; {prompt} is replaced with the task. A custom terminal command needs a {command} placeholder to run it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -309,6 +315,7 @@ private struct NotificationSettings: View {
                 Toggle("Review activity happens", isOn: $settings.notifyReview)
                 Toggle("A merge conflict appears", isOn: $settings.notifyConflicts)
                 Toggle("A comment awaits my reply", isOn: $settings.notifyComments)
+                Toggle("A PR of mine is merged or closed", isOn: $settings.notifyMerged)
                 Toggle("An AI agent finishes or may need me", isOn: $settings.notifyAgents)
             }
             Section("Test") {
@@ -320,5 +327,93 @@ private struct NotificationSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Checks
+
+/// Per-repo check names whose failures don't count toward a PR's CI state.
+private struct ChecksSettings: View {
+    @Environment(PRStore.self) private var store
+    @State private var newRepo = ""
+    @State private var newCheck = ""
+
+    var body: some View {
+        let rules = store.settings.ignoredChecks
+        Form {
+            Section {
+                Text("A failing ignored check doesn't turn a PR's CI red, mark it as needing an agent, or send CI notifications. It still blocks merging if the repo requires it. Ignore a check from an expanded PR (\(Image(systemName: "eye.slash"))) or add it here. GitHub only.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if rules.isEmpty {
+                Section { Text("No ignored checks.").foregroundStyle(.secondary) }
+            }
+            ForEach(rules.keys.sorted(), id: \.self) { repo in
+                Section {
+                    ForEach(rules[repo] ?? [], id: \.self) { name in
+                        HStack {
+                            Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                            Text(name)
+                            Spacer()
+                            Button {
+                                store.setCheck(name, ignored: false, in: repo)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .help("Stop ignoring \(name) in \(repo)").accessibilityLabel("Stop ignoring \(name)")
+                        }
+                    }
+                } header: {
+                    Label(repo, systemImage: "shippingbox")
+                }
+            }
+            Section("Ignore a check") {
+                HStack {
+                    TextField("owner/name", text: $newRepo).textFieldStyle(.roundedBorder)
+                    suggestions(repoSuggestions, help: "Repos of watched PRs") { newRepo = $0 }
+                }
+                HStack {
+                    TextField("check name", text: $newCheck).textFieldStyle(.roundedBorder).onSubmit(add)
+                    suggestions(checkSuggestions, help: "Checks seen failing on this repo's PRs") { newCheck = $0 }
+                    Button("Ignore", action: add)
+                        .disabled(trimmed(newRepo).isEmpty || trimmed(newCheck).isEmpty)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func suggestions(_ items: [String], help: String, pick: @escaping (String) -> Void) -> some View {
+        if !items.isEmpty {
+            Menu {
+                ForEach(items, id: \.self) { item in Button(item) { pick(item) } }
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .menuStyle(.borderlessButton).fixedSize().help(help)
+        }
+    }
+
+    private var repoSuggestions: [String] {
+        Array(Set(store.pullRequests.map(\.repo))).sorted()
+    }
+
+    private var checkSuggestions: [String] {
+        let repo = trimmed(newRepo).lowercased()
+        let ignored = store.settings.ignoredChecks(in: repo)
+        let seen = store.pullRequests.filter { $0.repo.lowercased() == repo }.flatMap(\.checks)
+            .filter { $0.state.isFailure }.map(\.name)
+        return Array(Set(seen).subtracting(ignored)).sorted()
+    }
+
+    private func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
+
+    private func add() {
+        let repo = trimmed(newRepo), name = trimmed(newCheck)
+        guard !repo.isEmpty, !name.isEmpty else { return }
+        store.setCheck(name, ignored: true, in: repo)
+        newCheck = ""
     }
 }

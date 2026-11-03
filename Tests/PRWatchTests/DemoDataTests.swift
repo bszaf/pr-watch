@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import PRWatch
 
 @Suite struct DemoDataTests {
@@ -43,6 +44,13 @@ import Testing
         #expect(prs.contains { $0.unresolvedThreads > 0 && $0.awaitingMyReply > 0 })
         #expect(prs.contains { $0.unresolvedThreads > 0 && $0.awaitingMyReply == 0 })
 
+        // Failing checks in the detail: a red PR, one green only through an ignored check, and a
+        // list cut off at the fetch cap.
+        let applied = prs.map { $0.applyingIgnoredChecks(DemoData.ignoredChecks[$0.repo] ?? []) }
+        #expect(applied.contains { $0.ciState?.isFailure == true && $0.checks.contains { $0.state.isFailure } })
+        #expect(applied.contains { $0.ciState == .success && !$0.ignoredFailures.isEmpty })
+        #expect(prs.contains { !$0.checksComplete })
+
         // Every activity kind appears in the feed — can't silently rot.
         #expect(Set(DemoData.activity.map(\.kind)) == Set(ActivityKind.allCases))
 
@@ -52,6 +60,17 @@ import Testing
         #expect(agents.contains { s in !s.prLinks.isEmpty && prs.contains { s.works(on: $0) } })
         #expect(agents.contains { s in s.prLinks.isEmpty && prs.contains { s.works(on: $0) } })
         #expect(agents.contains { $0.tty != nil } && agents.contains { $0.tty == nil })
+
+        // Worktree states: uncommitted changes, and a feature branch with no PR (with an agent in it).
+        let projects = DemoData.projects
+        #expect(projects.contains { $0.changedFiles > 0 })
+        let noPR = projects.filter { p in p.isActiveWithoutPR(now: Date()) && !prs.contains { $0.repo == p.repo && $0.headBranch == p.branch } }
+        #expect(noPR.contains { p in agents.contains { $0.cwd == p.path } })
+
+        // Today's progress has something merged of mine, and PRs that need an agent.
+        let mergedAt = DemoData.activity.first { $0.kind == .merged }?.date ?? .distantPast
+        #expect(dailyProgress(activity: DemoData.activity, prs: prs, agents: agents, now: mergedAt).merged > 0)
+        #expect(prs.contains { $0.isMine && $0.needsAgent })
 
         // At least one PR routes to each of Mine / Review / Others.
         #expect(prs.contains { $0.isMine })
@@ -77,6 +96,7 @@ import Testing
         #expect(!store.activity.isEmpty)
         #expect(store.nextPollDate == nil)   // polling is stopped while in demo mode
         #expect(store.lastError == nil)
+        #expect(store.pullRequests.contains { $0.ciState == .success && !$0.ignoredFailures.isEmpty })
 
         // Some demo PR maps to a demo local project via repo + head branch.
         #expect(store.pullRequests.contains { projects.project(for: $0) != nil })

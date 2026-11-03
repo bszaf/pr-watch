@@ -8,6 +8,23 @@ struct LocalProject: Identifiable, Sendable, Equatable {
     let path: String
     let branch: String?
     let repo: String?     // owner/repo from the origin remote
+    var changedFiles = 0          // uncommitted (incl. untracked) paths
+    var lastCommit: Date? = nil
+    var defaultBranch: String? = nil   // origin/HEAD target, e.g. "main"
+
+    /// On a branch that should end up as a PR (not the default / a mainline branch).
+    var onFeatureBranch: Bool {
+        guard let branch, branch != "HEAD" else { return false }
+        if let defaultBranch { return branch != defaultBranch }
+        return !["main", "master", "develop", "trunk"].contains(branch)
+    }
+
+    /// A feature branch with recent or uncommitted work. Old idle branches are left out:
+    /// after a squash merge they look exactly like branches that never got a PR.
+    func isActiveWithoutPR(now: Date) -> Bool {
+        guard onFeatureBranch else { return false }
+        return changedFiles > 0 || lastCommit.map { now.timeIntervalSince($0) < 7 * 86400 } ?? false
+    }
 }
 
 enum ProjectScanner {
@@ -30,7 +47,13 @@ enum ProjectScanner {
                 out.append(LocalProject(
                     id: path, name: entry, path: path,
                     branch: git(path, ["rev-parse", "--abbrev-ref", "HEAD"]),
-                    repo: git(path, ["config", "--get", "remote.origin.url"]).flatMap(normalizeRepo)
+                    repo: git(path, ["config", "--get", "remote.origin.url"]).flatMap(normalizeRepo),
+                    changedFiles: git(path, ["status", "--porcelain"])
+                        .map { $0.split(separator: "\n").count } ?? 0,
+                    lastCommit: git(path, ["log", "-1", "--format=%ct"])
+                        .flatMap(TimeInterval.init).map(Date.init(timeIntervalSince1970:)),
+                    defaultBranch: git(path, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+                        .map { $0.hasPrefix("origin/") ? String($0.dropFirst(7)) : $0 }
                 ))
             }
         }
@@ -64,7 +87,17 @@ final class ProjectStore {
 
     private var byRepoBranch: [String: LocalProject] = [:]
 
+    private var timer: Timer?
+
     init(settings: AppSettings) { self.settings = settings }
+
+    /// Rescan periodically so dirty / no-PR state of agent worktrees stays current.
+    func start() {
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.scan() }
+        }
+    }
 
     func scan() async {
         guard !isScanning else { return }
